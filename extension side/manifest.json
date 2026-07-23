@@ -25,7 +25,10 @@
     "https://x.com/i/grok*",
     "https://huggingface.co/chat/*",
     "https://dlp.internal.fortbendcountytx.gov/*",
-    "http://localhost:8787/*"
+    "http://localhost:8787/*",
+    "https://grok.com/*",
+    "https://copilot.cloud.microsoft/*",
+    "https://m365.cloud.microsoft/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -42,7 +45,10 @@
         "https://www.perplexity.ai/*",
         "https://poe.com/*",
         "https://x.com/i/grok*",
-        "https://huggingface.co/chat/*"
+        "https://huggingface.co/chat/*",
+        "https://grok.com/*",
+        "https://copilot.cloud.microsoft/*",
+        "https://m365.cloud.microsoft/*"
       ],
       "js": [
         "rules.js",

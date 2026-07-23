@@ -118,8 +118,23 @@ const DLP_RULES = (() => {
       id: "cjis",
       label: "criminal justice information",
       severity: "warn",
+      // Vocabulary ABOUT criminal-justice data. Kept broad-ish because the
+      // severity is warn (a confirm step), not block.
       pattern:
-        /\b(cjis|ncic|tcic|criminal history|rap sheet|arrest record|warrant number)\b/gi,
+        /\b(cjis|ncic|tcic|tlets|criminal history|rap sheet|arrest record|warrant number|booking (number|no|#|date|sheet)|arrestee|probable cause|incident report|case disposition|probation|parole|offense (code|date|report))\b/gi,
+    },
+    {
+      id: "cjis_id",
+      label: "criminal justice identifier",
+      severity: "warn",
+      // Record content itself: bare numeric identifiers near CJIS context.
+      // Keyword proximity keeps ordinary numbers from firing.
+      pattern: /\b\d{6,12}\b/g,
+      validate: (m, text, i) =>
+        nearKeyword(text, i, [
+          "sid", "fbi", "booking", "warrant", "incident", "citation",
+          "cause no", "offense", "arrest",
+        ]),
     },
     {
       id: "internal_host",
