@@ -81,6 +81,40 @@ const DLP_RULES = (() => {
         nearKeyword(text, i, ["routing", "aba", "account no", "acct", "account #", "iban"]),
     },
     {
+      id: "ssn_labeled",
+      label: "Social Security number (labeled)",
+      severity: "block",
+      // The strict ssn rule validates numeric ranges, so test-style values
+      // (000-xx-xxxx) pass through it by design. But an SSN-SHAPED value in a
+      // field labeled SSN is disclosure intent regardless of numeric validity
+      // -- and real record exports label their columns.
+      pattern: /\b\d{3}[- ]\d{2}[- ]\d{4}\b/g,
+      validate: (m, text, i) =>
+        nearKeyword(text, i, ["ssn", "social security", "soc sec", "ss#"], 160),
+    },
+    {
+      id: "record_header",
+      label: "structured record export (sensitive columns)",
+      severity: "block",
+      // Catches delimited exports by their HEADER, not their cells. Tokens are
+      // delimiter-bounded (start of line or , tab ; | ") with optional spaces,
+      // so CamelCase/no-space headers -- FBINumber, NCICCode, StateID,
+      // AgencyORI -- still hit where \b-based keywords structurally cannot.
+      pattern:
+        /(?:^|[,\t;|"])\s*(ssn|social ?security(?: ?number)?|date ?of ?birth|dob|fbi ?(?:number|no|#)|ncic(?: ?code)?|state ?id|sid|agency ?ori|ori|offense ?(?:code|description)?|arrest ?(?:date|record)?|booking ?(?:number|no|date)?|criminal ?history|routing ?(?:number|no)?|account ?(?:number|no)|mrn|medical ?record(?: ?number)?)\s*(?=$|[,\t;|"])/gim,
+      validate: (m, text, i) => {
+        // Fire only when the line reads like a header with 2+ sensitive
+        // columns. One token alone ("offense", "sid") is far too noisy.
+        const start = text.lastIndexOf("\n", i) + 1;
+        const end = text.indexOf("\n", i);
+        const line = text.slice(start, end === -1 ? text.length : end).toLowerCase();
+        const hits = line.match(
+          /(?:^|[,\t;|"])\s*(ssn|social ?security|date ?of ?birth|dob|fbi ?(?:number|no|#)|ncic|state ?id|sid|agency ?ori|ori|offense|arrest|booking|criminal ?history|routing|account ?(?:number|no)|mrn|medical ?record)/g
+        );
+        return !!hits && hits.length >= 2;
+      },
+    },
+    {
       id: "credential",
       label: "password or API credential",
       severity: "block",
@@ -97,7 +131,8 @@ const DLP_RULES = (() => {
       id: "dob",
       label: "date of birth",
       severity: "warn",
-      pattern: /\b(0?[1-9]|1[0-2])[\/\-](0?[1-9]|[12]\d|3[01])[\/\-](19|20)\d{2}\b/g,
+      pattern:
+        /\b(0?[1-9]|1[0-2])[\/\-](0?[1-9]|[12]\d|3[01])[\/\-](19|20)\d{2}\b|\b(19|20)\d{2}-(0?[1-9]|1[0-2])-(0?[1-9]|[12]\d|3[01])\b/g,
       validate: (m, text, i) =>
         nearKeyword(text, i, ["dob", "date of birth", "born", "birthdate", "b-day"]),
     },
