@@ -39,7 +39,7 @@ if [[ ! -f "$CONF_DIR/dlp.env" ]]; then
   {
     printf 'DLP_TOKEN=%s\n' "$TOKEN"
     printf 'DLP_DB=/var/lib/dlp/dlp.db\n'
-    printf 'DLP_MODEL=glm-5.2\n'
+    printf 'DLP_MODEL=qwen2.5:3b\n'
     printf 'OLLAMA_HOST=http://127.0.0.1:11434\n'
     printf 'DLP_SMTP=\n'
     printf 'DLP_MAIL_TO=\n'

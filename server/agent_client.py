@@ -22,8 +22,9 @@ from concurrent.futures import ThreadPoolExecutor
 import urllib.request
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-MODEL = os.environ.get("DLP_MODEL", "glm-5.2")
-WORKERS = int(os.environ.get("DLP_WORKERS", "3"))
+MODEL = os.environ.get("DLP_MODEL", "qwen2.5:3b")
+WORKERS = int(os.environ.get("DLP_WORKERS", "1"))
+NUM_CTX = int(os.environ.get("DLP_NUM_CTX", "8192"))
 
 SYSTEM = """You review text that a county employee submitted to a public AI chat
 service. Decide whether it disclosed non-public county information.
@@ -76,7 +77,7 @@ def _score_one(text: str) -> dict:
             "prompt": prompt,
             "format": "json",
             "stream": False,
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_ctx": NUM_CTX},
         }
     ).encode()
 
@@ -84,7 +85,7 @@ def _score_one(text: str) -> dict:
         f"{OLLAMA}/api/generate", data=body, headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=600) as r:
             raw = json.loads(r.read())["response"]
         verdict = json.loads(raw)
     except Exception as exc:
@@ -123,11 +124,15 @@ def score_user_history(employee: str, prompts: list[str]) -> dict:
     """One verdict over a user's full day of prompts, oldest first. Capped to
     fit the local model's context; truncation keeps the earliest prompts and
     is disclosed to the model."""
-    CAP = 24000
+    CAP = int(os.environ.get("DLP_HISTORY_CHARS", "12000"))
+    PER = max(400, CAP // max(1, len(prompts)))
     joined = ""
     used = 0
     for i, p in enumerate(prompts):
-        block = f"\n--- prompt {i + 1} ---\n{p}"
+        excerpt = p if len(p) <= PER else (
+            p[:PER] + f"\n[... {len(p) - PER} more chars in this prompt ...]"
+        )
+        block = f"\n--- prompt {i + 1} ---\n{excerpt}"
         if len(joined) + len(block) > CAP:
             joined += f"\n--- {len(prompts) - i} later prompts omitted for length ---"
             break
@@ -145,14 +150,14 @@ def score_user_history(employee: str, prompts: list[str]) -> dict:
             "prompt": prompt,
             "format": "json",
             "stream": False,
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_ctx": NUM_CTX},
         }
     ).encode()
     req = urllib.request.Request(
         f"{OLLAMA}/api/generate", data=body, headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with urllib.request.urlopen(req, timeout=900) as r:
             raw = json.loads(r.read())["response"]
         verdict = json.loads(raw)
     except Exception as exc:
