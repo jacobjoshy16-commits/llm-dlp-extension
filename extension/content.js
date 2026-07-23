@@ -316,6 +316,232 @@
     true
   );
 
+  /* ---------- attachments ----------
+   *
+   * A pasted spreadsheet is text; an ATTACHED .xlsx is a ZIP archive of
+   * compressed XML, and it never becomes composer text at all. Nothing in the
+   * text-scanning path can see it. That is the single largest remaining hole
+   * in this tool, and on a county fleet it is also the most likely one to be
+   * used: people attach the export rather than copy the cells.
+   *
+   * So parse the container here. .xlsx/.docx are ZIPs whose entries are raw
+   * DEFLATE, which Chrome decompresses natively via DecompressionStream --
+   * no bundled library, no code shipped off the workstation.
+   *
+   * Cells are rejoined with tabs and rows with newlines before scanning, so
+   * the existing delimiter-aware rules (record_header in particular) see the
+   * same shape they would from a paste.
+   */
+
+  const MAX_INSPECT_BYTES = 25 * 1024 * 1024;
+
+  async function inflateRaw(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(
+      new DecompressionStream("deflate-raw")
+    );
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  // Minimal ZIP central-directory reader. Returns only the entries we ask for.
+  async function unzip(buf, wanted) {
+    const dv = new DataView(buf);
+    const u8 = new Uint8Array(buf);
+    let eocd = -1;
+    const floor = Math.max(0, u8.length - 66000);
+    for (let i = u8.length - 22; i >= floor; i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return null; // not a ZIP
+    const count = dv.getUint16(eocd + 10, true);
+    let off = dv.getUint32(eocd + 16, true);
+    const out = {};
+    for (let n = 0; n < count; n++) {
+      if (off + 46 > u8.length || dv.getUint32(off, true) !== 0x02014b50) break;
+      const method = dv.getUint16(off + 10, true);
+      const compSize = dv.getUint32(off + 20, true);
+      const nameLen = dv.getUint16(off + 28, true);
+      const extraLen = dv.getUint16(off + 30, true);
+      const cmtLen = dv.getUint16(off + 32, true);
+      const localOff = dv.getUint32(off + 42, true);
+      const name = new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nameLen));
+      off += 46 + nameLen + extraLen + cmtLen;
+      if (!wanted(name)) continue;
+      const lNameLen = dv.getUint16(localOff + 26, true);
+      const lExtraLen = dv.getUint16(localOff + 28, true);
+      const start = localOff + 30 + lNameLen + lExtraLen;
+      const raw = u8.subarray(start, start + compSize);
+      try {
+        out[name] = method === 0 ? raw : await inflateRaw(raw);
+      } catch (_) { /* skip unreadable entry */ }
+    }
+    return out;
+  }
+
+  const decodeEntities = (s) =>
+    s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+     .replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
+     .replace(/&amp;/g, "&");
+
+  const asText = (bytes) => new TextDecoder().decode(bytes);
+
+  function sharedStrings(xml) {
+    if (!xml) return [];
+    return (xml.match(/<si>[\s\S]*?<\/si>/g) || []).map((si) =>
+      decodeEntities((si.match(/<t[^>]*>([\s\S]*?)<\/t>/g) || [])
+        .map((t) => t.replace(/<[^>]+>/g, "")).join(""))
+    );
+  }
+
+  // Rebuild the sheet as TSV so delimiter-aware rules behave exactly as they
+  // do on a copy-paste of the same cells.
+  function sheetToTsv(xml, strings) {
+    const rows = xml.match(/<row[\s\S]*?<\/row>/g) || [];
+    return rows.map((row) => {
+      const cells = row.match(/<c[\s\S]*?(?:\/>|<\/c>)/g) || [];
+      return cells.map((c) => {
+        const inline = c.match(/<is>[\s\S]*?<\/is>/);
+        if (inline) {
+          return decodeEntities((inline[0].match(/<t[^>]*>([\s\S]*?)<\/t>/g) || [])
+            .map((t) => t.replace(/<[^>]+>/g, "")).join(""));
+        }
+        const v = c.match(/<v>([\s\S]*?)<\/v>/);
+        if (!v) return "";
+        const raw = decodeEntities(v[1]);
+        return /t="s"/.test(c) ? (strings[+raw] ?? "") : raw;
+      }).join("\t");
+    }).join("\n");
+  }
+
+  /* Returns { text } when inspected, or { uninspectable: reason }. */
+  async function extractFileText(file) {
+    const name = (file.name || "").toLowerCase();
+    if (file.size > MAX_INSPECT_BYTES) return { uninspectable: "too large to inspect" };
+
+    if (/\.(csv|tsv|txt|json|xml|md|log)$/.test(name) || /^text\//.test(file.type || "")) {
+      return { text: await file.text() };
+    }
+
+    if (/\.(xlsx|xlsm|docx|pptx)$/.test(name)) {
+      const buf = await file.arrayBuffer();
+      const entries = await unzip(buf, (n) =>
+        n === "xl/sharedStrings.xml" ||
+        /^xl\/worksheets\/sheet\d+\.xml$/.test(n) ||
+        n === "word/document.xml" ||
+        /^ppt\/slides\/slide\d+\.xml$/.test(n)
+      );
+      if (!entries) return { uninspectable: "unreadable archive" };
+
+      if (entries["word/document.xml"] || Object.keys(entries).some((k) => k.startsWith("ppt/"))) {
+        const parts = Object.keys(entries)
+          .filter((k) => k === "word/document.xml" || k.startsWith("ppt/"))
+          .map((k) => asText(entries[k])
+            .replace(/<\/w:p>|<\/a:p>/g, "\n")
+            .replace(/<[^>]+>/g, " "));
+        return { text: decodeEntities(parts.join("\n")) };
+      }
+
+      const strings = sharedStrings(entries["xl/sharedStrings.xml"] &&
+        asText(entries["xl/sharedStrings.xml"]));
+      const sheets = Object.keys(entries)
+        .filter((k) => k.startsWith("xl/worksheets/"))
+        .sort()
+        .map((k) => sheetToTsv(asText(entries[k]), strings));
+      if (!sheets.length) return { uninspectable: "no readable sheets" };
+      return { text: sheets.join("\n") };
+    }
+
+    // .pdf, legacy .xls, images, archives -- cannot be read here.
+    return { uninspectable: `${name.split(".").pop() || "file"} cannot be inspected` };
+  }
+
+  async function assessFiles(files) {
+    const findings = [];
+    let text = "";
+    for (const file of files) {
+      let res;
+      try {
+        res = await extractFileText(file);
+      } catch (_) {
+        res = { uninspectable: "could not be read" };
+      }
+      if (res.uninspectable) {
+        // Honest failure: do not silently allow what was never inspected.
+        findings.push({
+          id: "uninspectable_file",
+          label: `attachment not inspected (${file.name}: ${res.uninspectable})`,
+          severity: "warn",
+          index: 0,
+          length: file.size || 0,
+          sample: "",
+        });
+        continue;
+      }
+      text += res.text + "\n";
+      const bulk = DLP_RULES.assessBulk(res.text);
+      const hits = bulk ? [bulk] : DLP_RULES.scan(res.text);
+      for (const h of hits) {
+        findings.push({ ...h, label: `${h.label} in ${file.name}` });
+      }
+    }
+    return { findings, text };
+  }
+
+  async function gateFiles(files, clear) {
+    if (!files || !files.length) return;
+    const { findings, text } = await assessFiles(files);
+    if (!findings.length) return;
+
+    const severity = DLP_RULES.worstSeverity(findings);
+    const v = { text: text || "", findings, severity, hash: null };
+    sha256(text || [...files].map((f) => f.name).join(",")).then((h) => {
+      v.hash = h;
+      report(v, "attachment");
+    });
+
+    // Enforcement happens at SUBMIT, not at attach time. Reading a ZIP is
+    // async, so by the time the verdict exists the site may already hold the
+    // File object -- there is no reliable way to un-attach it. What IS
+    // reliable is refusing to let the message be sent: the submit gate merges
+    // this risk and a block severity cannot be overridden there.
+    //
+    // This also keeps clean attachments frictionless, which is what stops the
+    // tool from being worked around.
+    pasteRisk = { findings, severity, at: Date.now() };
+
+    if (severity === "block") {
+      clear?.(); // best effort -- helps on sites that read the input lazily
+      showOverlay(v, null);
+    }
+  }
+
+  // Paperclip / file picker.
+  document.addEventListener(
+    "change",
+    (e) => {
+      const el = e.target;
+      if (!el || el.tagName !== "INPUT" || el.type !== "file") return;
+      const files = el.files;
+      if (!files || !files.length) return;
+      gateFiles(files, () => {
+        el.value = ""; // the site never gets to read it
+      });
+    },
+    true
+  );
+
+  // Drag and drop onto the composer. The drop is NOT cancelled -- cancelling
+  // every drop to wait on an async read would break legitimate uploads. The
+  // send is what gets gated.
+  document.addEventListener(
+    "drop",
+    (e) => {
+      const files = e.dataTransfer?.files;
+      if (!files || !files.length) return;
+      gateFiles(files, null);
+    },
+    true
+  );
+
   /* ---------- paste ---------- */
   /* Highest-yield signal: bulk leaks are pasted, not typed. */
 
