@@ -602,21 +602,32 @@
       <style>
         :host { all: initial; }
         .scrim { position:fixed; inset:0; background:rgba(12,14,18,.72);
-                 display:flex; align-items:center; justify-content:center; }
+                 display:flex; align-items:center; justify-content:center;
+                 padding:4vh 0; box-sizing:border-box; }
+        /* A findings list can run long -- a spreadsheet hits many rules across
+         * many files. Without a height cap the panel grows past the viewport
+         * and pushes the buttons off screen, which strands the user on a modal
+         * they cannot dismiss. Cap the panel, scroll the list, and keep the
+         * header and footer pinned so there is always a way out. */
         .panel { width:min(520px,92vw); background:#fff; color:#14171c;
                  border-top:4px solid ${blocking ? "#b31b1b" : "#b07000"};
-                 font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
-        .hd { padding:20px 24px 8px; }
+                 font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+                 max-height:92vh; display:flex; flex-direction:column;
+                 box-sizing:border-box; }
+        .hd { padding:20px 24px 8px; flex:0 0 auto; }
+        .count { margin-top:6px; font:12px ui-monospace,Menlo,monospace; color:#6b7280; }
         .eyebrow { font:600 11px/1 ui-monospace,Menlo,monospace; letter-spacing:.12em;
                    text-transform:uppercase; color:${blocking ? "#b31b1b" : "#b07000"}; }
         h2 { margin:10px 0 0; font-size:19px; font-weight:600; }
         p { margin:8px 0 0; color:#3d444d; }
-        ul { list-style:none; margin:16px 24px 0; padding:0; border-top:1px solid #e3e6ea; }
+        ul { list-style:none; margin:16px 24px 0; padding:0; border-top:1px solid #e3e6ea;
+             flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
         li { display:flex; justify-content:space-between; gap:16px;
              padding:9px 0; border-bottom:1px solid #e3e6ea; }
         .lbl { font-weight:500; }
         .smp { font:12px ui-monospace,Menlo,monospace; color:#6b7280; }
-        .ft { display:flex; justify-content:flex-end; gap:10px; padding:18px 24px 20px; }
+        .ft { display:flex; justify-content:flex-end; gap:10px; padding:18px 24px 20px;
+              flex:0 0 auto; border-top:1px solid #e3e6ea; background:#fff; }
         button { font:inherit; padding:9px 16px; border:1px solid #14171c;
                  background:#14171c; color:#fff; cursor:pointer; }
         button.ghost { background:#fff; color:#14171c; }
@@ -632,6 +643,7 @@
             <p>${blocking
               ? "It was not sent. Remove the items below, or use the county's internal AI tool for this request."
               : "Confirm the items below are safe to share with a public AI service."}</p>
+            <div class="count">${findings.length} item${findings.length === 1 ? "" : "s"} found · press Esc to close</div>
           </div>
           <ul>${rows}</ul>
           <div class="ft">
