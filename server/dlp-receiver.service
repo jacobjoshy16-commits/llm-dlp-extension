@@ -1,0 +1,22 @@
+[Unit]
+Description=LLM Data Guard receiver
+After=network-online.target
+
+[Service]
+User=dlp
+WorkingDirectory=/opt/dlp
+Environment=DLP_DB=/var/lib/dlp/dlp.db
+EnvironmentFile=/etc/dlp/dlp.env
+ExecStart=/opt/dlp/venv/bin/uvicorn receiver:app --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=5
+
+# The database holds county data. Keep the service boxed in.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dlp
+
+[Install]
+WantedBy=multi-user.target

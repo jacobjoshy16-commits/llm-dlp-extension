@@ -1,0 +1,10 @@
+[Unit]
+Description=LLM Data Guard end-of-day compliance pass
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=dlp
+WorkingDirectory=/opt/dlp
+EnvironmentFile=/etc/dlp/dlp.env
+ExecStart=/opt/dlp/venv/bin/python /opt/dlp/eod_review.py

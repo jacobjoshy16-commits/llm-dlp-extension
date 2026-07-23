@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "County LLM Data Guard",
+  "version": "0.1.0",
+  "description": "Blocks sensitive county data from being submitted to public AI chat services.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "idle",
+    "unlimitedStorage",
+    "identity",
+    "identity.email"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8787/*",
+    "http://localhost:8787/*",
+    "https://dlp.internal.fortbendcountytx.gov/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://copilot.microsoft.com/*",
+    "https://www.perplexity.ai/*",
+    "https://poe.com/*",
+    "https://x.com/i/grok*",
+    "https://huggingface.co/chat/*",
+    "https://dlp.internal.fortbendcountytx.gov/*",
+    "http://localhost:8787/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://copilot.microsoft.com/*",
+        "https://www.perplexity.ai/*",
+        "https://poe.com/*",
+        "https://x.com/i/grok*",
+        "https://huggingface.co/chat/*"
+      ],
+      "js": [
+        "rules.js",
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "storage": {
+    "managed_schema": "policy_schema.json"
+  }
+}

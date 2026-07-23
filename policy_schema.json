@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "title": "Tier 1 metadata endpoint"
+    },
+    "reviewEndpoint": {
+      "type": "string",
+      "title": "Tier 2 end-of-day batch endpoint"
+    },
+    "flushSeconds": {
+      "type": "number",
+      "title": "Seconds between metadata uploads"
+    },
+    "eodHour": {
+      "type": "number",
+      "title": "End-of-day hour, local time (0-23)"
+    },
+    "eodMinute": {
+      "type": "number",
+      "title": "End-of-day minute"
+    },
+    "maxQueue": {
+      "type": "number",
+      "title": "Max metadata events buffered"
+    },
+    "maxReviewItems": {
+      "type": "number",
+      "title": "Max staged prompts buffered"
+    },
+    "maxStageAgeHours": {
+      "type": "number",
+      "title": "Hard purge age for staged text"
+    },
+    "token": {
+      "type": "string",
+      "title": "Shared token (must match DLP_TOKEN on the server)"
+    },
+    "workstationTag": {
+      "type": "string",
+      "title": "Workstation/user tag stamped on flagged events (set per machine by IT)"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Send the LLM Data Guard report at 07:00 CT
+
+[Timer]
+# After the 17:45 scoring pass has finished overnight.
+OnCalendar=Tue-Sat 07:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
