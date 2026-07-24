@@ -26,7 +26,7 @@ id dlp &>/dev/null || useradd --system --home "$APP_DIR" --shell /usr/sbin/nolog
 
 echo "==> directories"
 mkdir -p "$APP_DIR" "$DATA_DIR" "$CONF_DIR"
-install -m 644 receiver.py eod_review.py agent_client.py morning_report.py requirements.txt "$APP_DIR/"
+install -m 644 receiver.py eod_review.py agent_client.py morning_report.py dlp_policy_bridge.py requirements.txt "$APP_DIR/"
 
 echo "==> virtualenv"
 python3 -m venv "$APP_DIR/venv"
