@@ -247,3 +247,6 @@ the last one. The rest need network-layer controls or acceptable-use policy.
 - Texas Public Information Act analysis: captured prompt metadata created on
   county systems may be subject to disclosure. Ask county counsel before you
   collect the first event, not after.
+
+
+## extension (prompt data) -> ubuntu linux server -> compliance agent (linux server) -> EOD analysis (linux server) -> EOD morning report (linux server)
