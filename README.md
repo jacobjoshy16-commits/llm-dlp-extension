@@ -1,4 +1,4 @@
-# County LLM DLP 
+# County LLM DLP (v1)
 
 Chrome/Edge MV3 extension that inspects text before it is submitted to public AI
 chat services and blocks submissions containing protected county data.
