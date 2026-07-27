@@ -152,7 +152,7 @@
   }
 
   /* Fire-and-forget. Never awaited on the submit path. */
-  function report(v, source) {
+  async function report(v, source) {
     const key = v.hash + "|" + source;
     if (reported.has(key)) return;
     reported.add(key);
@@ -176,6 +176,7 @@
     // Full-capture policy: every prompt is staged so the nightly agent can
     // analyze the user's complete input history, not just flagged items.
     const MAX_STAGE = 262144;
+    const context = await ctxExtractor.recentContext();
     chrome.runtime.sendMessage({
       type: "stage",
       payload: {
@@ -186,6 +187,7 @@
         fullLength: v.text.length,
         truncated: v.text.length > MAX_STAGE,
         text: v.text.slice(0, MAX_STAGE),
+        context,
         findings: v.findings.map(({ id, label, severity }) => ({ id, label, severity })),
         ts: new Date().toISOString(),
       },

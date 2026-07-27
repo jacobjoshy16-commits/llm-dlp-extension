@@ -60,6 +60,7 @@ def init():
               batch_id TEXT, received_at TEXT, site TEXT, source TEXT,
               severity TEXT, prompt_hash TEXT, ts TEXT,
               body TEXT,               -- NULL after the agent scores it
+              context TEXT,            -- surrounding turns, same lifecycle as body
               status TEXT DEFAULT 'pending',
               verdict TEXT
             );
@@ -76,12 +77,15 @@ def init():
 
 
 def migrate():
-    """Add the employee attribution column to existing databases."""
+    """Add the employee attribution and context columns to existing databases."""
     with closing(db()) as c:
         for table in ("events", "review_items"):
             cols = [r[1] for r in c.execute(f"PRAGMA table_info({table})")]
             if "employee" not in cols:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN employee TEXT")
+        cols = [r[1] for r in c.execute("PRAGMA table_info(review_items)")]
+        if "context" not in cols:
+            c.execute("ALTER TABLE review_items ADD COLUMN context TEXT")
         c.commit()
 
 
@@ -141,6 +145,7 @@ async def review_batch(req: Request, _=Depends(require_token)):
             i.get("promptHash"),
             i.get("ts"),
             i.get("text"),
+            json.dumps(i.get("context", [])),
             i.get("employee"),
         )
         for i in payload.get("items", [])
@@ -148,7 +153,7 @@ async def review_batch(req: Request, _=Depends(require_token)):
     with closing(db()) as c:
         c.executemany(
             "INSERT INTO review_items (batch_id,received_at,site,source,"
-            "severity,prompt_hash,ts,body,employee) VALUES (?,?,?,?,?,?,?,?,?)",
+            "severity,prompt_hash,ts,body,context,employee) VALUES (?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
         c.commit()
