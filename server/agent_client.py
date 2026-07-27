@@ -21,9 +21,39 @@ from concurrent.futures import ThreadPoolExecutor
 
 import urllib.request
 
+# --- ported from compliance-agent-fbc's audit.py (verify()) ---
+# Task-agnostic: checks whether the model's claimed evidence is a real
+# substring of the source text. No NIST/control coupling in the original,
+# so it drops in here unchanged. This is the actual shared discipline
+# between the two agents: not the classification logic (different task
+# shapes), but "if the model says a quote is in the text, it must be."
+import re as _re
+_WS = _re.compile(r'\s+')
+
+
+def _norm(s):
+    return _WS.sub(' ', (s or "")).strip().lower()
+
+
+def verify_evidence(evidence, source_text):
+    """quoted | absent | hallucinated."""
+    e = _norm(evidence)
+    if not e or e in ("none", "n/a", "null"):
+        return "absent"
+    if e in _norm(source_text):
+        return "quoted"
+    w = e.split()
+    if len(w) >= 6 and " ".join(w[:6]) in _norm(source_text):
+        return "quoted"
+    return "hallucinated"
+
+
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 MODEL = os.environ.get("DLP_MODEL", "qwen2.5:3b")
 WORKERS = int(os.environ.get("DLP_WORKERS", "1"))
+# Ollama silently truncates any prompt past its default context (2048-4096
+# tokens) with NO error. A full day of prompts is far larger than that, so the
+# history pass would score a quarter of the day and report success. Set it.
 NUM_CTX = int(os.environ.get("DLP_NUM_CTX", "8192"))
 
 SYSTEM = """You review text that a county employee submitted to a public AI chat
@@ -49,7 +79,8 @@ Judge the text as written. Do not assume benign intent to excuse a disclosure,
 and do not invent details that are not present."""
 
 SCHEMA_HINT = """Respond with JSON only, no prose:
-{"risk":"none|low|high","categories":["..."],"rationale":"one sentence"}"""
+{"risk":"none|low|high","categories":["..."],"rationale":"one sentence",
+"evidence":"the exact phrase that justifies this risk level, copied verbatim from the text, or NONE"}"""
 
 
 def retrieve_policy(text: str) -> str:
@@ -96,10 +127,21 @@ def _score_one(text: str) -> dict:
     risk = str(verdict.get("risk", "error")).lower()
     if risk not in {"none", "low", "high"}:
         risk = "error"
+
+    # A "high" claim with no real quote behind it is exactly the failure mode
+    # audit.py's verify() exists to catch. Unlike the compliance audit (where
+    # a hallucinated quote safely DROPS an unsupported finding), a false
+    # NEGATIVE is the dangerous direction for DLP -- so we never downgrade
+    # risk on a failed evidence check. We flag it instead: a human sees
+    # "claimed high risk but couldn't substantiate the quote," rather than
+    # either silently trusting it or silently clearing it.
+    ev_status = verify_evidence(str(verdict.get("evidence", "")), text)
+
     return {
         "risk": risk,
         "categories": verdict.get("categories", [])[:6],
         "rationale": str(verdict.get("rationale", ""))[:400],
+        "evidence_status": ev_status,
         "model": MODEL,
     }
 
@@ -125,6 +167,11 @@ def score_user_history(employee: str, prompts: list[str]) -> dict:
     fit the local model's context; truncation keeps the earliest prompts and
     is disclosed to the model."""
     CAP = int(os.environ.get("DLP_HISTORY_CHARS", "12000"))
+    # Split the budget across the day so no single prompt can crowd out the
+    # rest. A 256KB spreadsheet paste would otherwise consume the entire cap
+    # on its own and the loop would break on item one -- scoring an empty day
+    # and reporting it as clean. This pass is about the SHAPE of the day;
+    # per-item scoring reads each prompt in full separately.
     PER = max(400, CAP // max(1, len(prompts)))
     joined = ""
     used = 0

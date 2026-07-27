@@ -316,3 +316,4 @@ const DLP_RULES = (() => {
 
   return { scan, scanChunked, assessBulk, redact, worstSeverity, RULES };
 })();
+
