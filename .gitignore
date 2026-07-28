@@ -1,4 +1,3 @@
-extension/server-config.js
 dist/
 node_modules/
 *.zip
