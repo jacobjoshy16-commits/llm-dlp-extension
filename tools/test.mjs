@@ -20,17 +20,50 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import { createContext, runInContext } from "node:vm";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "extension");
 
+/* Load content-script files the way CHROME does.
+ *
+ * This used to use `new Function("globalThis", ...)`, which passes a fake
+ * global as a parameter. That is not how a content script runs, and the
+ * difference hid a real bug: rules.js declares `const DLP_RULES` at top level,
+ * which lives in script scope and never reaches the global object. Under the
+ * old harness the tests assigned `g.DLP_RULES` by hand, so everything passed
+ * while conversation.js -- which reads `globalThis.DLP_RULES` -- was silently
+ * inert in an actual browser, returning zero findings forever.
+ *
+ * vm.createContext + runInContext reproduces the real semantics: every file is
+ * a separate top-level script sharing one global, top-level const/let stay in
+ * script scope, and only explicit `globalThis.X =` assignments are visible
+ * across files. If a module cannot see a dependency in the browser, it cannot
+ * see it here either.
+ */
 function load(...files) {
-  const g = {};
+  const ctx = createContext({
+    console,
+    performance: { now: () => Number(process.hrtime.bigint() / 1000n) / 1000 },
+    setTimeout, clearTimeout, structuredClone,
+    TextEncoder, TextDecoder,
+    navigator: { userAgent: "Chrome/121" },
+    document: {
+      querySelectorAll: () => [], querySelector: () => null,
+      addEventListener: () => {}, documentElement: {}, title: "",
+    },
+    location: { hostname: "test.local", pathname: "/" },
+    MutationObserver: function () { this.observe = () => {}; this.disconnect = () => {}; },
+    chrome: {
+      runtime: { getManifest: () => ({ manifest_version: 3 }), sendMessage: () => {},
+                 onMessage: { addListener: () => {} }, lastError: null },
+      storage: { local: {}, managed: {}, onChanged: { addListener: () => {} } },
+      permissions: {},
+    },
+  });
   for (const f of files) {
-    const code = readFileSync(join(SRC, f), "utf8");
-    // eslint-disable-next-line no-new-func
-    new Function("globalThis", "module", code)(g, { exports: {} });
+    runInContext(readFileSync(join(SRC, f), "utf8"), ctx, { filename: f });
   }
-  return g;
+  return runInContext("globalThis", ctx);
 }
 
 const g = load("sites.js", "policy.js");
@@ -381,16 +414,11 @@ test("every group named in the sample resolves without falling back", () => {
  * NOTHING.
  */
 
-const ctxg = {};
-for (const f of ["rules.js", "conversation.js"]) {
-  new Function("globalThis", "module", "performance", readFileSync(join(SRC, f), "utf8"))(
-    ctxg, { exports: {} }, { now: () => Date.now() }
-  );
-}
-// rules.js declares DLP_RULES with a top-level const, which does not land on
-// our synthetic globalThis the way an assignment would. Re-evaluate it and
-// hand the result to the context module explicitly.
-ctxg.DLP_RULES = new Function(readFileSync(join(SRC, "rules.js"), "utf8") + "\nreturn DLP_RULES;")();
+/* Loaded exactly as Chrome loads them -- no hand-assigned globals. If
+ * conversation.js cannot reach DLP_RULES here, it cannot reach it in a
+ * browser either, which is the whole point. */
+const ctxg = load("rules.js", "conversation.js");
+
 const C = ctxg.DLP_CONTEXT;
 const CI = C._internal;
 
@@ -406,7 +434,9 @@ test("SSN split across two messages is caught", () => {
 
 test("split finding names both messages it spans", () => {
   const f = CI.splitFindings(["her ssn is 123-45", "6789"]);
-  assert.deepEqual(f[0].parts, [0, 1]);
+  assert.equal(f[0].parts.length, 2);
+  assert.equal(f[0].parts[0], 0);
+  assert.equal(f[0].parts[1], 1);
 });
 
 test("an SSN wholly inside one message is NOT a context finding", () => {
@@ -550,7 +580,7 @@ test("window stitches with both spaced and tight joins", () => {
 
 test("assess() returns [] for a single message with no history", () => {
   C.reset();
-  assert.deepEqual(C.assess("ssn 123-45-6789"), []);
+  assert.equal(C.assess("ssn 123-45-6789").length, 0);
 });
 
 test("assess() catches a split across recorded submissions", () => {
@@ -565,7 +595,7 @@ test("assess() stays quiet across an ordinary recorded thread", () => {
   C.reset();
   C.noteSubmission("what is the homestead exemption deadline", "allow", []);
   C.noteSubmission("does it differ for seniors", "allow", []);
-  assert.deepEqual(C.assess("where do they file it"), []);
+  assert.equal(C.assess("where do they file it").length, 0);
 });
 
 test("history is bounded to the configured window", () => {

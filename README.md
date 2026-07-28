@@ -15,7 +15,7 @@ the thing works.
 ## Load it (development)
 
 ```bash
-npm test           # 34 tests over the site matcher and policy resolver
+npm test           # 67 tests: matcher, policy resolver, and conversation context
 npm run build      # generates dist/chrome-catalog, dist/firefox-catalog, ...
 ```
 
@@ -137,6 +137,7 @@ extension/            source (NOT a load-unpacked target -- no manifest here)
   discovery.js        heuristic detector for AI sites not in the catalog
   browser-compat.js   chrome/browser namespace + Firefox API gaps
   rules.js            local detection ruleset (unchanged from v1)
+  conversation.js     cross-message context: split identifiers, cumulative ID
   content.js          interception layer
   background.js       forwarder + policy distribution + dynamic registration
   options.js/.html    read-only status page
@@ -144,7 +145,7 @@ extension/            source (NOT a load-unpacked target -- no manifest here)
   policy_schema.json  managed-policy schema
 tools/
   build.mjs           generates per-browser manifests from the catalog
-  test.mjs            34 tests over the matcher and policy resolver
+  test.mjs            67 tests: matcher, policy resolver, conversation context
   patch_lan.py        point a dev build at a LAN backend
 enterprise/           fleet deployment
   README.md           the deployment guide -- start here for rollout

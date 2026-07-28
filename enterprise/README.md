@@ -18,7 +18,7 @@ Four things had to change, and none of them are detection logic:
 ## 1. Build
 
 ```bash
-npm test                    # 34 tests over the matcher and policy resolver
+npm test                    # 67 tests: matcher, policy resolver, conversation context
 npm run build               # all targets, catalog coverage -> dist/
 npm run build:broad         # adds https://*/* for discover mode
 npm run package             # both, zipped for upload

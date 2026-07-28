@@ -317,3 +317,23 @@ const DLP_RULES = (() => {
   return { scan, scanChunked, assessBulk, redact, worstSeverity, RULES };
 })();
 
+/* Publish onto globalThis.
+ *
+ * `const DLP_RULES` above lives in SCRIPT scope, not on the global object.
+ * Inside one content script that distinction is invisible -- content.js says
+ * `DLP_RULES.scan(...)` as a bare identifier and it resolves fine, because
+ * Chrome runs every content-script file in one shared isolated world.
+ *
+ * But `globalThis.DLP_RULES` is undefined, and any module that reaches for it
+ * that way gets undefined with NO error -- an optional-chained read just
+ * returns nothing and the caller concludes there is nothing to find. That is
+ * exactly how conversation.js came to be silently inert: every context scan
+ * returned zero findings and every test passed, because the test harness had
+ * assigned the global by hand.
+ *
+ * So: publish explicitly, the same way sites.js, policy.js, discovery.js and
+ * conversation.js all do. Keeping the const means content.js is unchanged.
+ */
+globalThis.DLP_RULES = DLP_RULES;
+if (typeof module !== "undefined" && module.exports) module.exports = DLP_RULES;
+
