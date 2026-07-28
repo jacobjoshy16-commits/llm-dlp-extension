@@ -78,6 +78,20 @@
     // behavior, narrowest permission ask). "discover" = also run the heuristic
     // detector on other pages, which requires broad host permissions.
     coverage: "catalog",
+    /* Cross-message context analysis. OFF by default.
+     *
+     * It runs on the submit path and reads recent conversation turns, so it
+     * costs more than a single-message scan and it is newer than the tuned
+     * regexes in rules.js. Both are reasons an admin should switch it on
+     * deliberately rather than inherit it.
+     *
+     *   off      no history is read at all
+     *   monitor  findings are reported, never enforced
+     *   warn     context findings cap at a confirm step
+     *   enforce  a context block refuses the send
+     */
+    contextMode: "off",
+    contextWindow: 5,
     // Never scan these, at all, in any mode. Banking, payroll, health portals:
     // pages where the extension reading composer text is itself the privacy
     // problem. This list wins over everything, including strict.

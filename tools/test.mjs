@@ -372,6 +372,229 @@ test("every group named in the sample resolves without falling back", () => {
   }
 });
 
+
+/* ---------- conversation context ----------
+ *
+ * The failure mode to guard against is NOT "misses a split SSN". It is
+ * "flags ordinary conversation", because that is what makes people route
+ * around the tool. So roughly half of these assert that context finds
+ * NOTHING.
+ */
+
+const ctxg = {};
+for (const f of ["rules.js", "conversation.js"]) {
+  new Function("globalThis", "module", "performance", readFileSync(join(SRC, f), "utf8"))(
+    ctxg, { exports: {} }, { now: () => Date.now() }
+  );
+}
+// rules.js declares DLP_RULES with a top-level const, which does not land on
+// our synthetic globalThis the way an assignment would. Re-evaluate it and
+// hand the result to the context module explicitly.
+ctxg.DLP_RULES = new Function(readFileSync(join(SRC, "rules.js"), "utf8") + "\nreturn DLP_RULES;")();
+const C = ctxg.DLP_CONTEXT;
+const CI = C._internal;
+
+test("context module loads and sees the ruleset", () => {
+  assert.ok(C && CI && ctxg.DLP_RULES);
+});
+
+test("SSN split across two messages is caught", () => {
+  const f = CI.splitFindings(["her ssn is 123-45", "6789 thanks"]);
+  assert.ok(f.length > 0, "expected a split finding");
+  assert.ok(f.some((x) => x.id.startsWith("ssn")));
+});
+
+test("split finding names both messages it spans", () => {
+  const f = CI.splitFindings(["her ssn is 123-45", "6789"]);
+  assert.deepEqual(f[0].parts, [0, 1]);
+});
+
+test("an SSN wholly inside one message is NOT a context finding", () => {
+  // Already caught by the normal per-message path; re-reporting it here would
+  // double-count and would re-block every later message in the thread.
+  const f = CI.splitFindings(["ssn 123-45-6789", "what is the deadline"]);
+  assert.equal(f.length, 0);
+});
+
+test("ordinary multi-turn conversation produces nothing", () => {
+  const convo = [
+    "What is the deadline to file a homestead exemption?",
+    "Does that change if the owner turned 65 last year?",
+    "Where do they submit the form?",
+    "Thanks, and is there a fee?",
+  ];
+  assert.equal(CI.splitFindings(convo).length, 0);
+  assert.equal(CI.cumulativeFindings(convo.map((m) => CI.scanRules(m))).length, 0);
+});
+
+test("numbers spanning a boundary that are not identifiers stay clean", () => {
+  const f = CI.splitFindings(["the budget line was 4820", "17 dollars over"]);
+  assert.equal(f.length, 0);
+});
+
+test("cumulative: 3 identity classes over 3 messages warns", () => {
+  const msgs = [
+    "dob 04/12/1979 for the applicant",
+    "case 21-CR-004411 is the matter",
+    "reach them at clerk@fortbendcountytx.gov",
+  ];
+  const f = CI.cumulativeFindings(msgs.map((m) => CI.scanRules(m)));
+  assert.equal(f.length, 1);
+  assert.equal(f[0].severity, "warn");
+});
+
+test("cumulative: 4+ classes escalates to block", () => {
+  const msgs = [
+    "dob 04/12/1979",
+    "case 21-CR-004411",
+    "clerk@fortbendcountytx.gov",
+    "ssn 123-45-6789",
+  ];
+  const f = CI.cumulativeFindings(msgs.map((m) => CI.scanRules(m)));
+  assert.equal(f[0].severity, "block");
+});
+
+test("cumulative ignores attributes concentrated in ONE message", () => {
+  // Spread is the whole signal. One message with everything in it is just a
+  // message the normal scanner already blocked.
+  const one = ["dob 04/12/1979 case 21-CR-004411 clerk@fortbendcountytx.gov ssn 123-45-6789"];
+  assert.equal(CI.cumulativeFindings(one.map((m) => CI.scanRules(m))).length, 0);
+});
+
+test("ssn rule variants collapse to ONE identity class", () => {
+  // ssn, ssn_bare and ssn_labeled all fire on a single number. Counting that
+  // as three attributes would make one SSN look like a re-identification.
+  const cls = new Set(["ssn", "ssn_bare", "ssn_labeled"].map((r) => CI.IDENTITY_CLASS[r]));
+  assert.equal(cls.size, 1);
+});
+
+test("PERSON_CLASSES excludes infrastructure and credentials", () => {
+  // IT's normal day is subnets, hostnames, and tokens spread across messages.
+  // Those are sensitive, but they do not COMBINE into the re-identification of
+  // a person, and counting them that way would block IT's routine work -- the
+  // exact false positive that gets a tool routed around.
+  //
+  // Asserted structurally, on the class map itself, rather than behaviourally.
+  // A mutation test showed why: there are only two distinct non-person classes
+  // (infrastructure, credential) and CUMULATIVE_WARN is 3, so NO input can
+  // currently distinguish "filter present" from "filter absent". A behavioural
+  // test here would pass either way and give false confidence.
+  //
+  // This assertion is the real contract, and it will start doing behavioural
+  // work the moment a third non-person class is added.
+  const nonPerson = new Set(
+    Object.values(CI.IDENTITY_CLASS).filter(
+      (c) => !["ssn", "financial", "license", "birthdate", "case", "health",
+               "contact", "criminal_justice"].includes(c)
+    )
+  );
+  assert.ok(nonPerson.has("infrastructure"));
+  assert.ok(nonPerson.has("credential"));
+
+  // Guard the gap above: if someone adds a third non-person class, the
+  // behavioural case becomes reachable and this test must gain teeth.
+  assert.ok(
+    nonPerson.size <= 2,
+    `${nonPerson.size} non-person classes now exist -- cumulative filtering is ` +
+    `behaviourally reachable, add a real test for it`
+  );
+});
+
+test("cumulative counts only DISTINCT person classes, not repeats", () => {
+  // Three messages each carrying the same class must not read as three
+  // attributes. This is the live half of the filter logic.
+  const perMsg = [
+    [{ id: "dob", severity: "warn" }],
+    [{ id: "dob", severity: "warn" }],
+    [{ id: "dob", severity: "warn" }],
+  ];
+  assert.equal(CI.cumulativeFindings(perMsg).length, 0);
+});
+
+test("anaphora alone, with no prior sensitive subject, is clean", () => {
+  const msgs = ["what are the office hours", "the resident asked about parking"];
+  assert.equal(CI.threadFindings(msgs.map((m) => CI.scanRules(m)), msgs[1]).length, 0);
+});
+
+test("anaphora after a sensitive subject warns, never blocks", () => {
+  const msgs = ["arrest record for booking number 55512", "what should the resident I mentioned do next"];
+  const f = CI.threadFindings(msgs.map((m) => CI.scanRules(m)), msgs[1]);
+  assert.equal(f.length, 1);
+  assert.equal(f[0].severity, "warn");
+});
+
+test("bare pronouns do not trigger the thread rule", () => {
+  assert.equal(CI.ANAPHORA.test("what should she do next"), false);
+  assert.equal(CI.ANAPHORA.test("can he appeal it"), false);
+});
+
+test("splitting after a block is marked as evasion", () => {
+  CI.enforced.set("ssn", { action: "block", at: Date.now() });
+  const marked = CI.markEvasion(CI.splitFindings(["her ssn is 123-45", "6789"]));
+  assert.ok(marked.some((f) => f.id === "evasion_retry"));
+  assert.ok(marked.every((f) => f.id !== "evasion_retry" || f.severity === "block"));
+  CI.enforced.clear();
+});
+
+test("without a prior block the same split is not evasion", () => {
+  CI.enforced.clear();
+  const marked = CI.markEvasion(CI.splitFindings(["her ssn is 123-45", "6789"]));
+  assert.ok(marked.every((f) => f.id !== "evasion_retry"));
+});
+
+test("window stitches with both spaced and tight joins", () => {
+  const { text, bounds } = CI.buildWindow(["ab", "cd"], "");
+  assert.equal(text, "abcd");
+  assert.equal(bounds[1].start, 2);
+});
+
+test("assess() returns [] for a single message with no history", () => {
+  C.reset();
+  assert.deepEqual(C.assess("ssn 123-45-6789"), []);
+});
+
+test("assess() catches a split across recorded submissions", () => {
+  C.reset();
+  C.noteSubmission("her ssn is 123-45", "allow", []);
+  const f = C.assess("6789");
+  assert.ok(f.length > 0);
+  assert.ok(f.every((x) => x.context === true));
+});
+
+test("assess() stays quiet across an ordinary recorded thread", () => {
+  C.reset();
+  C.noteSubmission("what is the homestead exemption deadline", "allow", []);
+  C.noteSubmission("does it differ for seniors", "allow", []);
+  assert.deepEqual(C.assess("where do they file it"), []);
+});
+
+test("history is bounded to the configured window", () => {
+  C.reset();
+  C.init({ maxTurns: 3 });
+  for (let i = 0; i < 20; i++) C.noteSubmission("message " + i, "allow", []);
+  assert.ok(C.stats().turns <= 3, `kept ${C.stats().turns}`);
+});
+
+test("a large window stays well under a frame budget", () => {
+  C.reset();
+  C.init({ maxTurns: 5 });
+  // Five 4KB turns -- the documented worst case.
+  for (let i = 0; i < 5; i++) {
+    C.noteSubmission("resident inquiry regarding permit status. ".repeat(100), "allow", []);
+  }
+  const t0 = Date.now();
+  for (let i = 0; i < 20; i++) C.assess("and what about the fee schedule for next quarter");
+  const per = (Date.now() - t0) / 20;
+  assert.ok(per < 16, `context assess averaged ${per.toFixed(1)}ms, budget 16ms`);
+});
+
+test("reset clears history and enforcement memory", () => {
+  C.noteSubmission("ssn 123-45-6789", "block", [{ id: "ssn" }]);
+  C.reset();
+  assert.equal(C.stats().turns, 0);
+  assert.equal(C.stats().enforcedRules.length, 0);
+});
+
 /* ---------- report ---------- */
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

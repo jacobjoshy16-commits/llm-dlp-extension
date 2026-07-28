@@ -86,7 +86,7 @@ const pkg = JSON.parse(
 
 const CONTENT_FILES = [
   "browser-compat.js", "sites.js", "policy.js", "discovery.js",
-  "rules.js", "content.js",
+  "rules.js", "conversation.js", "content.js",
 ];
 
 const SHIP_FILES = [

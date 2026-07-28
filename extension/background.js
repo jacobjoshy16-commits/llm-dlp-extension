@@ -149,7 +149,7 @@ const DISCOVER_SCRIPT_ID = "dlp-discover";
 const CATALOG_SCRIPT_ID = "dlp-catalog";
 const SCRIPT_FILES = [
   "browser-compat.js", "sites.js", "policy.js", "discovery.js",
-  "rules.js", "content.js",
+  "rules.js", "conversation.js", "content.js",
 ];
 
 async function syncRegistrations() {

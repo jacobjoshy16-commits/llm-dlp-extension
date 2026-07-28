@@ -80,7 +80,10 @@
 
     if (r.site) {
       active = ctx.mode !== "off";
-      if (active) announce("catalog");
+      if (active) {
+        startContext(effective, r);
+        announce("catalog");
+      }
       return;
     }
 
@@ -96,6 +99,7 @@
       ctx.discovered = true;
       ctx.mode = P.normalizeMode(effective.unknownSiteMode) || "monitor";
       active = ctx.mode !== "off";
+      if (active) startContext(effective, r);
       // Report the host regardless of mode. The point of discovery is to learn
       // where people actually go, and that is worth knowing even when the
       // decision was to do nothing about it.
@@ -110,6 +114,43 @@
         });
       } catch (_) {}
     });
+  }
+
+  /* Conversation context.
+   *
+   * Off unless policy turns it on. This is a real-time analysis running on the
+   * submit path, and the honest default for something with that cost profile
+   * is opt-in -- an admin should decide to pay it, not inherit it.
+   *
+   * The self-disable hook writes a gap event. A context layer that quietly
+   * switched itself off would leave the fleet thinking it had a control it no
+   * longer has, which is the failure mode this codebase already refuses
+   * elsewhere (an unscored item is never recorded as clean). */
+  function startContext(policy, resolved) {
+    if (policy.contextMode === "off" || policy.contextMode === undefined) return;
+    if (!globalThis.DLP_CONTEXT) return;
+    ctxWindow = Math.max(2, Math.min(policy.contextWindow || 5, 10));
+    globalThis.DLP_ON_CONTEXT_DISABLED = (reason) => {
+      contextOn = false;
+      send({
+        type: "event",
+        payload: {
+          site: SITE, siteId: ctx.siteId, source: "system", severity: "gap",
+          note: `conversation context disabled: ${reason}`,
+          engine: BR?.ENGINE || "unknown", ts: new Date().toISOString(),
+        },
+      });
+    };
+    try {
+      globalThis.DLP_CONTEXT.init({
+        selectors: resolved.site?.selectors || null,
+        maxTurns: ctxWindow,
+      });
+      contextOn = true;
+      contextStrict = policy.contextMode === "enforce";
+    } catch (_) {
+      contextOn = false;
+    }
   }
 
   function announce(how) {
@@ -243,6 +284,9 @@
     return { ...v, severity, findings: v.findings.concat(pr.findings) };
   }
 
+  let contextOn = false;
+  let contextStrict = false;
+  let ctxWindow = 5;
   let overlayOpen = false;
   let replaying = false;
   let replayDepth = 0;
@@ -466,18 +510,67 @@
     }
   }
 
+  /* Fold conversation context into a verdict.
+   *
+   * ORDER MATTERS FOR COST. This runs only when the per-message decision came
+   * back "allow". If the message already blocks on its own, the verdict cannot
+   * get worse and the context pass is pure latency -- the same reasoning as the
+   * early break in scanChunked(). In practice that means the expensive path is
+   * skipped exactly when the user is already being interrupted, and the common
+   * clean case pays for a bounded scan over at most 16KB.
+   *
+   * contextMode "warn" caps context findings at a confirm step no matter what
+   * the analysis returned. Cross-message inference is newer and less proven
+   * than the tuned single-message regexes, so an admin can take the detection
+   * without granting it blocking authority until they trust it.
+   */
+  function withContext(v, d) {
+    if (!contextOn || !globalThis.DLP_CONTEXT) return d;
+    if (d.action !== "allow") return d;
+
+    let extra;
+    try {
+      extra = globalThis.DLP_CONTEXT.assess(v.text);
+    } catch (_) {
+      return d;
+    }
+    if (!extra || !extra.length) return d;
+
+    const capped = contextStrict
+      ? extra
+      : extra.map((f) => (f.severity === "block" ? { ...f, severity: "warn" } : f));
+
+    const P = globalThis.DLP_POLICY;
+    const merged = [...d.findings, ...capped];
+    if (!P) {
+      const worst = capped.some((f) => f.severity === "block") ? "block" : "warn";
+      return { action: worst, findings: merged, exemptCount: d.exemptCount };
+    }
+    const re = P.decide(ctx.mode, merged, ctx.exempt);
+    return { ...re, exemptCount: d.exemptCount + re.exemptCount };
+  }
+
+  function noteSent(text, action, findings) {
+    if (!contextOn || !globalThis.DLP_CONTEXT) return;
+    try {
+      globalThis.DLP_CONTEXT.noteSubmission(text, action, findings);
+    } catch (_) {}
+  }
+
   function gate(e, source, el, text) {
     // Fast path: we already scanned this exact string.
     if (cached.text === text) {
       const v = mergeVerdict(cached);
-      const d = decide(v);
+      const d = withContext(v, decide(v));
       if (permitted(v, d)) {
         pasteRisk = null; // this send accounts for the pasted content
         report(v, source, d);
+        noteSent(text, d.action, d.findings);
         return; // untouched -- the site's own handler runs normally
       }
       stop(e);
       report(v, source, d);
+      noteSent(text, d.action, d.findings);
       showOverlay(v, d, () => {
         pasteRisk = null;
         submitNow(el);
@@ -490,8 +583,9 @@
     (async () => {
       cached = await computeVerdict(text);
       const v = mergeVerdict(cached);
-      const d = decide(v);
+      const d = withContext(v, decide(v));
       report(v, source, d);
+      noteSent(text, d.action, d.findings);
       if (permitted(v, d)) {
         pasteRisk = null;
         submitNow(el);

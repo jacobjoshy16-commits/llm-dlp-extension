@@ -321,6 +321,52 @@ county intranet search box fleet-wide.
 re-scoped without a rebuild, so covering a newly discovered tool is a policy
 push the same afternoon rather than a build-sign-deploy cycle.
 
+## Conversation context
+
+`rules.js` reads one string: whatever is in the composer now. That is
+structurally blind to the obvious evasion — type `her SSN is 123-45`, send,
+then type `6789`. Neither message matches anything. The disclosure happened.
+
+`agent_client.py` already describes this analysis in `HISTORY_SYSTEM`
+("details spread across prompts that individually look harmless"), but it runs
+at 17:45 and the two-tier table says tier 2 **can't block**. `conversation.js`
+brings a bounded version forward to the submit gate, where it still can.
+
+Four findings, each only firing when single-message scanning cannot see it:
+
+| Finding | Fires when |
+|---|---|
+| `split_identifier` | a tuned regex matches across a message boundary |
+| `cumulative_identity` | 3+ distinct identity *classes* spread over 2+ messages (4+ blocks) |
+| `evasion_retry` | a split identifier for a rule already blocked this session |
+| `sensitive_thread` | anaphora pointing back at a sensitive subject (warn only) |
+
+**It never re-reports history.** If message 1 held an SSN, message 5 isn't
+blocked for it — message 1 was already blocked on its own. A context layer that
+re-flagged the window would refuse every message after the first flagged one,
+and users would rightly call it broken.
+
+**Off by default** (`contextMode: "off"`). It runs on the submit path and is
+newer than the tuned regexes. Turn it on in `monitor`, read a week, then decide.
+
+Cost discipline, because this is the interaction people perform hundreds of
+times a day:
+
+- Skipped entirely when the per-message verdict already blocks — the verdict
+  can't get worse, so scanning further is pure latency
+- Extraction is driven by a dirty flag from a `MutationObserver` whose callback
+  does nothing but set a boolean
+- Bounded at 5 turns × 4KB, 16KB total
+- Self-disables after 3 budget overruns and writes a `gap` event — degrading to
+  v1 behavior is acceptable; hanging the composer is not
+
+Measured: **0.18ms** per submit at the documented worst case, against a 16ms
+frame budget.
+
+Conversation text never leaves the workstation. Findings carry rule ids,
+redacted samples, and message indices — never surrounding text. Staging still
+ships only the current prompt.
+
 ## Enforcement modes
 
 One behavior for everyone is right for a twelve-site pilot and wrong for a

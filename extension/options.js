@@ -87,6 +87,12 @@
           : "<span class='mono'>—</span>",
       ],
       [
+        "Conversation context",
+        eff.contextMode && eff.contextMode !== "off"
+          ? `${pill(eff.contextMode)} · window ${esc(eff.contextWindow || 5)} messages`
+          : "<span class='mono'>off</span> — cross-message analysis disabled",
+      ],
+      [
         "Rule exemptions",
         (eff.exemptRules || []).length
           ? `<span class="mono">${esc(eff.exemptRules.join(", "))}</span>`
