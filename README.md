@@ -14,20 +14,37 @@ the thing works.
 
 ## Load it (development)
 
+`chrome://extensions` → Developer mode → **Load unpacked** → select **`extension/`**.
+
+That works straight from a clone — no build step. `extension/manifest.json` is
+committed and covers all 99 sites on Chrome/Edge.
+
+1. Open chatgpt.com, type `SSN: 123-45-6789`, press Enter. It should be blocked.
+2. Type an ordinary question. It should go through with a short delay.
+3. Open the extension's options page to see mode, coverage, and queue depth.
+
 ```bash
-npm test           # 67 tests: matcher, policy resolver, and conversation context
-npm run build      # generates dist/chrome-catalog, dist/firefox-catalog, ...
+npm test           # 67 tests: matcher, policy resolver, conversation context
+npm run build      # regenerates extension/manifest.json + all dist/ targets
 ```
 
-1. `chrome://extensions` → Developer mode → **Load unpacked** → `dist/chrome-catalog`.
-   (Firefox: `about:debugging` → Load Temporary Add-on → `dist/firefox-catalog/manifest.json`)
-2. Open chatgpt.com, type `SSN: 123-45-6789`, press Enter. It should be blocked.
-3. Type an ordinary question. It should go through with a short delay.
-4. Open the extension's options page to see mode, coverage, and queue depth.
+### extension/ vs dist/
 
-**Do not load the `extension/` folder directly.** It has no manifest — the
-manifest is generated per browser target from the site catalog, because
-maintaining ninety-nine hostnames in two lists by hand guarantees drift.
+| | `extension/` | `dist/<target>-<coverage>/` |
+|---|---|---|
+| Purpose | development and demos | shipping |
+| Manifest | committed, chrome + catalog | generated per browser |
+| Firefox event page, Safari perms, broad coverage | no | yes |
+| Needs a build | no | yes |
+
+`extension/manifest.json` is **generated** — it is rewritten on every
+`npm run build` from `extension/sites.js`, so it cannot drift from the catalog.
+Change site coverage in `sites.js`, not in the manifest; hand edits are
+overwritten.
+
+Firefox needs a build (`npm run build`, then load
+`dist/firefox-catalog/manifest.json` via `about:debugging`), because Firefox
+MV3 uses an event page rather than a service worker.
 
 ## How it decides
 
@@ -141,6 +158,7 @@ extension/            source (NOT a load-unpacked target -- no manifest here)
   content.js          interception layer
   background.js       forwarder + policy distribution + dynamic registration
   options.js/.html    read-only status page
+  manifest.json       GENERATED load-unpacked target (chrome + catalog)
   server-config.js    <- the only file you edit to point at your server
   policy_schema.json  managed-policy schema
 tools/
