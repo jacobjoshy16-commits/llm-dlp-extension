@@ -1,13 +1,33 @@
-# County LLM DLP (v1)
+# County LLM DLP
 
-Chrome/Edge MV3 extension that inspects text before it is submitted to public AI
-chat services and blocks submissions containing protected county data.
+MV3 extension that inspects text before it is submitted to AI services and
+blocks submissions containing protected county data.
 
-## Load it
+Covers **~99 AI applications** across **Chrome, Edge, Firefox, Chromium, and
+Safari**, force-installable by enterprise policy, with per-department
+enforcement modes and heuristic detection of AI sites that are not in the
+catalog.
 
-1. `chrome://extensions` → enable Developer mode → **Load unpacked** → select this folder.
+For fleet deployment — GPO, Intune, MDM, Ansible — see
+**[enterprise/README.md](enterprise/README.md)**. Everything below describes how
+the thing works.
+
+## Load it (development)
+
+```bash
+npm test           # 34 tests over the site matcher and policy resolver
+npm run build      # generates dist/chrome-catalog, dist/firefox-catalog, ...
+```
+
+1. `chrome://extensions` → Developer mode → **Load unpacked** → `dist/chrome-catalog`.
+   (Firefox: `about:debugging` → Load Temporary Add-on → `dist/firefox-catalog/manifest.json`)
 2. Open chatgpt.com, type `SSN: 123-45-6789`, press Enter. It should be blocked.
 3. Type an ordinary question. It should go through with a short delay.
+4. Open the extension's options page to see mode, coverage, and queue depth.
+
+**Do not load the `extension/` folder directly.** It has no manifest — the
+manifest is generated per browser target from the site catalog, because
+maintaining ninety-nine hostnames in two lists by hand guarantees drift.
 
 ## How it decides
 
@@ -28,9 +48,14 @@ target than the thing you were protecting.
 | `keydown` Enter, capture phase | Primary submit path on every major LLM site |
 | Send-button `click`, capture phase | Mouse users and mobile-width layouts |
 | `paste`, capture phase | Highest-yield signal — bulk leaks are pasted, not typed |
+| `change` on file inputs / `drop` | Attached .xlsx and .docx, parsed in-browser |
 
-All three run at `document_start` in the capture phase so they fire before the
-page's own handlers. Running after means the request is already in flight.
+All run at `document_start` in the capture phase so they fire before the page's
+own handlers. Running after means the request is already in flight.
+
+Every handler is installed immediately but no-ops until policy resolves. Waiting
+to attach until the policy arrives would lose the first submit on a fast-loading
+page — which is the one submit a user notices.
 
 ## Before you deploy
 
@@ -38,11 +63,24 @@ page's own handlers. Running after means the request is already in flight.
   documents and a corpus of ordinary work questions. Measure false positives.
   A tool that blocks legitimate work gets uninstalled or worked around within a
   week — that is how DLP pilots die.
+- **Start in `monitor`, not `enforce`.** Run a pilot department for two weeks
+  and count how many blocks would have been false positives. That number is
+  what you bring to the meeting where someone asks whether this is ready. The
+  point above is unmeasurable without it.
 - **Selector rot.** `data-testid*="send"` will break when OpenAI or Anthropic
   ships a UI change. Budget for monthly checks, and add a synthetic test that
-  loads each site and confirms a known-bad string is still blocked.
+  loads each site and confirms a known-bad string is still blocked. When it
+  does break, the fix is a policy push (an `extraSites` entry reusing the
+  catalog `id` replaces its selectors) rather than a build cycle.
 - **Give people an approved alternative.** Blocking without offering the county's
   internal AI tool converts employees into adversaries who will use their phones.
+  This is why sanctioned tools default to `monitor` instead of `enforce`: the
+  internal assistant is the destination you *want* traffic going to, and
+  blocking there pushes it somewhere you cannot see.
+- **Extend `neverScan`.** Your payroll, benefits, and case-management vendors
+  belong on it before pilot. A case management system is exactly where an
+  employee legitimately types an SSN all day, and it is a page where the
+  extension reading composer text is itself the privacy problem.
 
 ## Two-tier design
 
@@ -93,10 +131,28 @@ is on `America/Chicago`, or the pass runs at the wrong hour.
 ## Repo layout
 
 ```
-extension/            load-unpacked target
-  manifest.json
+extension/            source (NOT a load-unpacked target -- no manifest here)
+  sites.js            AI application catalog, ~99 entries. Source of truth.
+  policy.js           mode resolution: site/category/department precedence
+  discovery.js        heuristic detector for AI sites not in the catalog
+  browser-compat.js   chrome/browser namespace + Firefox API gaps
+  rules.js            local detection ruleset (unchanged from v1)
+  content.js          interception layer
+  background.js       forwarder + policy distribution + dynamic registration
+  options.js/.html    read-only status page
   server-config.js    <- the only file you edit to point at your server
-  rules.js  content.js  background.js  policy_schema.json
+  policy_schema.json  managed-policy schema
+tools/
+  build.mjs           generates per-browser manifests from the catalog
+  test.mjs            34 tests over the matcher and policy resolver
+  patch_lan.py        point a dev build at a LAN backend
+enterprise/           fleet deployment
+  README.md           the deployment guide -- start here for rollout
+  windows/            Chrome+Edge PowerShell, Firefox policies.json
+  macos/              MDM payloads, Safari assessment
+  linux/              one script for all four browsers
+  samples/            baseline and per-department policy
+dist/                 generated, gitignored
 server/               everything that runs on Ubuntu
   receiver.py         HTTP intake for both tiers
   eod_review.py       17:45 pass -- pulls pending, scores, deletes bodies
@@ -142,14 +198,16 @@ ssh ubuntu@yourhost 'cd dlp-server && sudo ./setup.sh'
 
 `setup.sh` installs the venv, creates the `dlp` service account, generates a
 shared token, and enables both systemd units. It prints the token — paste it and
-your real hostname into `server-config.js`, and add that hostname to
-`host_permissions` in `manifest.json`.
+your real hostname into `server-config.js`, then add the origin to
+`DEFAULT_BACKEND_ORIGINS` in `tools/build.mjs` and rebuild. (For a LAN box,
+`python3 tools/patch_lan.py <ip>` does both.)
 
 **The failure you will hit:** if the endpoint host is missing from
 `host_permissions`, the service worker's fetch is blocked and events queue up
 locally with no error anywhere the user can see. It looks exactly like a server
-outage. Check `chrome.storage.local.get('queue', console.log)` in the service
-worker console first.
+outage. Open the extension's **options page** — it shows queue depth, last
+successful batch, and whether managed policy was detected. That page exists
+because every failure this extension has is silent by nature.
 
 ### Auth, honestly
 
@@ -226,18 +284,84 @@ Only items scored `high` keep their text. Everything the agent clears is
 a reason to hold county records on this box forever. Status moves to `expired`
 and the review file says so rather than showing a blank.
 
+## Coverage model
+
+Three layers, because no single one is sufficient.
+
+**1. The catalog** (`extension/sites.js`) — ~99 AI applications in ten
+categories: public chat, enterprise/tenant-bound assistants, answer engines,
+coding assistants, document analysis, writing and translation, media
+generation, meeting capture, model playgrounds, and browser agents.
+
+v1 covered twelve, and only the obvious ones. The categories that were missing
+matter more than the count:
+
+- **Translation.** Pasting a resident's letter into a free translator ships it
+  to a third party exactly like pasting it into a chatbot does. Most AI
+  acceptable-use policies do not mention it.
+- **AI app builders** (v0, Bolt, Lovable, Replit). People paste config files
+  and connection strings into these.
+- **Document analysis** (ChatPDF, Humata). These exist to have a file uploaded
+  to them, and for a county that file is a case record about as often as it is
+  a manual.
+- **Model playgrounds** (OpenAI Platform, AI Studio, Bedrock). Low headcount,
+  high blast radius — whoever is in there is pasting production data to test a
+  prompt.
+- **Meeting notetakers.** Interception does little here, but reporting their
+  presence means somebody notices a bot sitting in closed-session meetings.
+
+**2. Discovery** (`extension/discovery.js`) — a catalog is permanently one step
+behind, and the gap is widest the week a new tool trends. In `discover`
+coverage the extension scores every page against chat-UI signals and treats
+anything over threshold as an AI surface. Default is monitor-and-report, never
+block: a heuristic that blocks is a heuristic that will one day take out the
+county intranet search box fleet-wide.
+
+**3. Policy** (`extension/policy.js`) — sites can be added, disabled, or
+re-scoped without a rebuild, so covering a newly discovered tool is a policy
+push the same afternoon rather than a build-sign-deploy cycle.
+
+## Enforcement modes
+
+One behavior for everyone is right for a twelve-site pilot and wrong for a
+county. Legal handles privileged material all day; IT pastes stack traces as a
+job function; Communications drafts press releases. Configure for the strictest
+population and everyone else lives with false positives.
+
+| Mode | block finding | warn finding |
+|---|---|---|
+| `off` | — | — |
+| `monitor` | logged | logged |
+| `warn` | confirm | confirm |
+| `enforce` | **refused** | confirm |
+| `strict` | **refused** | **refused** |
+
+Resolved per site, per category, or per department. `enforce` is the default
+and reproduces v1 exactly. See
+[enterprise/README.md](enterprise/README.md#4-configure).
+
+Rule exemptions (IT exempting `internal_host`, say) suppress *enforcement*, not
+*detection* — the finding is still scanned, still reported, still counted, and
+marked `exempt: true`. An exemption that erased its own evidence would be
+indistinguishable from a detection failure, and nobody could ever tell that one
+was too broad.
+
 ## What this does not cover
 
 Be explicit about this with your supervisor. The extension protects against
 **accidental disclosure by cooperating employees**. It does not stop:
 
-- Desktop apps (ChatGPT for Windows, Claude Desktop)
+- Desktop apps (ChatGPT for Windows, Claude Desktop, Copilot in Office clients)
 - Personal phones and home computers
-- Other browsers or browser profiles without the extension
+- Browsers you did not deploy to — the catalog is browser-agnostic, the
+  *deployment* is not. Someone who installs Vivaldi is uncovered until the
+  force-install policy is extended to it.
 - Anyone who disables the extension, unless it is force-installed via policy
 
-Force-install via Chrome/Edge group policy (`ExtensionInstallForcelist`) closes
-the last one. The rest need network-layer controls or acceptable-use policy.
+Force-install closes the last one on all of Chrome, Edge, and Firefox — see
+[enterprise/README.md](enterprise/README.md#3-deploy). Discovery narrows the
+"site we never heard of" gap. Nothing here touches the first two; those need
+network-layer controls or acceptable-use policy.
 
 ## Open items that are not code
 

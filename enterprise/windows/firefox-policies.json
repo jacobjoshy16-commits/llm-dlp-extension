@@ -1,0 +1,99 @@
+{
+  "_comment": [
+    "Firefox enterprise policy. Deploy to whichever of these Firefox reads:",
+    "  Windows : %ProgramFiles%\\Mozilla Firefox\\distribution\\policies.json",
+    "            or HKLM\\Software\\Policies\\Mozilla\\Firefox (ADMX)",
+    "  macOS   : /Applications/Firefox.app/Contents/Resources/distribution/policies.json",
+    "            or the com.mozilla.Firefox configuration profile",
+    "  Linux   : /etc/firefox/policies/policies.json",
+    "",
+    "THREE THINGS THAT ARE DIFFERENT FROM CHROME AND WILL BITE YOU:",
+    "",
+    "1. HOST PERMISSIONS ARE OPTIONAL IN MV3. Firefox does not auto-grant",
+    "   host_permissions the way Chrome does. An extension installed normally",
+    "   sits there with no site access and reports nothing, silently. Two ways",
+    "   out, both used below: install it force_installed (Firefox 138+ locks",
+    "   host permissions on for force-installed MV3 extensions, and 153+ stops",
+    "   the user changing them at all), and set runtime_allowed_hosts.",
+    "",
+    "2. THE EXTENSION ID IS THE GECKO ID, not a 32-char hash. It comes from",
+    "   browser_specific_settings.gecko.id in the manifest --",
+    "   dlp-guard@fortbendcountytx.gov -- and it is stable across builds,",
+    "   which is genuinely easier than Chrome's key-pinning dance.",
+    "",
+    "3. NO chrome.identity.getProfileUserInfo. Attribution MUST come from",
+    "   workstationTag. If you skip it, every Firefox event lands as",
+    "   'unattributed' and nobody notices until an incident needs a name.",
+    "",
+    "Unsigned XPIs will not install in release Firefox. Either submit to AMO as",
+    "an unlisted add-on (Mozilla signs it, you self-host the XPI) or standardize",
+    "on Firefox ESR, which honors the ExtensionSettings install_url for signed",
+    "add-ons only. There is no supported way to run an unsigned extension on",
+    "release Firefox -- plan for AMO unlisted signing in the project timeline."
+  ],
+  "policies": {
+    "ExtensionSettings": {
+      "dlp-guard@fortbendcountytx.gov": {
+        "installation_mode": "force_installed",
+        "install_url": "https://dlp.internal.fortbendcountytx.gov/ext/dlp-guard.xpi",
+        "updates_disabled": false,
+        "default_area": "navbar",
+        "_comment_hosts": [
+          "Firefox 153+ honors runtime_allowed_hosts to grant host permissions",
+          "administratively. On earlier versions force_installed + MV3 grants",
+          "the declared host_permissions from 138 onward. Below 138 the",
+          "extension will install but have no site access -- test this on your",
+          "actual ESR version before rollout, because the failure is silent."
+        ],
+        "runtime_allowed_hosts": [
+          "*://*.chatgpt.com/*",
+          "*://*.openai.com/*",
+          "*://*.claude.ai/*",
+          "*://gemini.google.com/*",
+          "*://*.perplexity.ai/*",
+          "*://copilot.microsoft.com/*",
+          "*://*.cloud.microsoft/*",
+          "*://grok.com/*",
+          "*://dlp.internal.fortbendcountytx.gov/*"
+        ]
+      }
+    },
+    "3rdparty": {
+      "Extensions": {
+        "dlp-guard@fortbendcountytx.gov": {
+          "endpoint": "https://dlp.internal.fortbendcountytx.gov/api/events",
+          "reviewEndpoint": "https://dlp.internal.fortbendcountytx.gov/api/review-batch",
+          "policyEndpoint": "https://dlp.internal.fortbendcountytx.gov/api/policy",
+          "policyPullMinutes": 60,
+          "token": "set-from-etc-dlp-dlp.env",
+          "workstationTag": "SET-PER-MACHINE",
+          "defaultMode": "enforce",
+          "unknownSiteMode": "monitor",
+          "coverage": "catalog",
+          "stageMode": "all",
+          "allowServerExemptions": false,
+          "categoryModes": {
+            "enterprise_ai": "monitor",
+            "meeting_ai": "monitor",
+            "platform": "enforce"
+          },
+          "flushSeconds": 30,
+          "eodHour": 17,
+          "eodMinute": 30,
+          "maxQueue": 500,
+          "maxReviewItems": 300,
+          "maxStageAgeHours": 72
+        }
+      }
+    },
+    "DisableTelemetry": true,
+    "DisableFirefoxAccounts": false,
+    "BlockAboutConfig": false,
+    "_comment_devtools": [
+      "Consider BlockAboutAddons if your threat model includes an employee",
+      "disabling the add-on. It cannot be disabled when force_installed, but",
+      "about:debugging can still be used to inspect it. Weigh that against the",
+      "help-desk cost of locking down about: pages fleet-wide."
+    ]
+  }
+}

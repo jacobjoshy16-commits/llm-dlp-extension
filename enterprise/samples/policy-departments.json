@@ -1,0 +1,161 @@
+{
+  "_comment": [
+    "DEPARTMENTAL POLICY, one file for the whole fleet.",
+    "",
+    "The deploy script sets `group` per OU (or per machine) and every workstation",
+    "picks the matching overlay out of groupPolicies. One GPO, one artifact to",
+    "review, one file in change control -- instead of eleven near-identical",
+    "policy files that drift apart within a quarter.",
+    "",
+    "WHY DEPARTMENTS NEED DIFFERENT RULES AT ALL",
+    "-------------------------------------------",
+    "A single fleet-wide configuration has to be set for the strictest",
+    "population, which means everyone else lives with false positives. The",
+    "README already names the consequence: 'a tool that blocks legitimate work",
+    "gets uninstalled or worked around within a week.' They cannot uninstall a",
+    "force-installed extension -- so instead they use their phone, and you have",
+    "traded a logged event for an invisible one. That is a worse outcome than",
+    "the false positive.",
+    "",
+    "Overlay semantics: a group overlay is merged ON TOP of the baseline, so it",
+    "only needs to state its differences. Objects merge key-by-key; arrays",
+    "replace wholesale."
+  ],
+
+  "defaultMode": "enforce",
+  "unknownSiteMode": "monitor",
+  "coverage": "catalog",
+  "group": "SET-PER-OU-BY-DEPLOY-SCRIPT",
+
+  "groupPolicies": {
+
+    "legal": {
+      "_why": [
+        "County Attorney. Privileged material, active litigation, sealed",
+        "records. Strict means warn-severity findings block too, and an",
+        "uninspectable attachment is refused rather than flagged -- for this",
+        "group 'we could not read the PDF' is not an acceptable outcome."
+      ],
+      "defaultMode": "strict",
+      "unknownSiteMode": "enforce",
+      "categoryModes": {
+        "enterprise_ai": "warn",
+        "meeting_ai": "warn"
+      }
+    },
+
+    "hr": {
+      "_why": [
+        "Personnel files, discipline, medical and benefits data. Same posture",
+        "as legal, except HR genuinely lives in Workday all day -- which is",
+        "already in neverScan, so nothing here needs to loosen for it."
+      ],
+      "defaultMode": "strict",
+      "unknownSiteMode": "enforce"
+    },
+
+    "sheriff": {
+      "_why": [
+        "CJIS applies. The cjis and cjis_id rules exist for this group above",
+        "all others, and the FBI CJIS Security Policy makes disclosure to a",
+        "third-party service a reportable event, not a policy preference.",
+        "",
+        "Note media_ai is enforced here rather than warned: an investigator",
+        "uploading a suspect photo to an image tool is a real scenario and it",
+        "is not one to leave to a confirm dialog."
+      ],
+      "defaultMode": "strict",
+      "unknownSiteMode": "enforce",
+      "categoryModes": {
+        "media_ai": "strict",
+        "enterprise_ai": "warn",
+        "meeting_ai": "enforce"
+      }
+    },
+
+    "health": {
+      "_why": [
+        "HIPAA covered functions. The medical rule is warn-severity by default",
+        "because the vocabulary is noisy in general office use -- but in this",
+        "department a prompt containing 'patient' and 'diagnosis' is exactly",
+        "what needs stopping, so strict promotes it to a block."
+      ],
+      "defaultMode": "strict",
+      "unknownSiteMode": "enforce"
+    },
+
+    "it": {
+      "_why": [
+        "The one group with a legitimate, daily need to paste text that trips",
+        "internal_host: stack traces, config files, subnet plans. Exempting",
+        "that ONE rule for this group is the difference between a tool they",
+        "use and a tool they route around.",
+        "",
+        "Note what is NOT exempted: credential and private_key stay live. An",
+        "API key in a paste is the highest-value thing this tool catches, and",
+        "IT is the group most likely to paste one.",
+        "",
+        "code_ai is warn rather than enforce because pasting a snippet into a",
+        "coding assistant is the job. The warn step still logs it."
+      ],
+      "defaultMode": "enforce",
+      "exemptRules": ["internal_host"],
+      "categoryModes": {
+        "code_ai": "warn",
+        "platform": "warn",
+        "enterprise_ai": "monitor"
+      }
+    },
+
+    "gis": {
+      "_why": [
+        "Parcel and address data is largely public record in Texas. The",
+        "case_number and dob rules fire constantly on parcel exports and",
+        "survey dates, and neither is a disclosure here."
+      ],
+      "defaultMode": "enforce",
+      "exemptRules": ["internal_host", "case_number"],
+      "categoryModes": {
+        "code_ai": "warn"
+      }
+    },
+
+    "communications": {
+      "_why": [
+        "Public information office. Their job is producing material intended",
+        "for release, and gov_email fires on every press contact they write.",
+        "Warn mode across the board: log everything, interrupt rarely."
+      ],
+      "defaultMode": "warn",
+      "exemptRules": ["gov_email"],
+      "categoryModes": {
+        "media_ai": "warn",
+        "writing_ai": "warn"
+      }
+    },
+
+    "general": {
+      "_why": [
+        "Everyone not in a named group. Deliberately the baseline and nothing",
+        "more -- if a department needs an exception, give it a group so the",
+        "exception is visible in change control rather than quietly widening",
+        "the default for the whole county."
+      ],
+      "defaultMode": "enforce"
+    },
+
+    "pilot": {
+      "_why": [
+        "Rollout group. Monitor everything, block nothing, stage everything.",
+        "Run a department here for two weeks BEFORE enforcing on it, then read",
+        "the morning report and count how many blocks would have been false",
+        "positives. That number is the single most useful thing you can bring",
+        "to the meeting where someone asks whether this is ready."
+      ],
+      "defaultMode": "monitor",
+      "unknownSiteMode": "monitor",
+      "coverage": "discover",
+      "stageMode": "all"
+    }
+  }
+}

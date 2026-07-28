@@ -24,6 +24,108 @@
   "use strict";
 
   const SITE = location.hostname;
+  const PATH = location.pathname;
+  const BR = globalThis.DLP_BROWSER;
+  const api = BR?.api || chrome;
+
+  /* ---------- policy gate ----------
+   *
+   * v1 activated unconditionally, because the manifest match list WAS the
+   * policy. At enterprise scale the manifest is only a floor: coverage,
+   * per-site mode, and rule exemptions all arrive from managed policy or the
+   * server, and none of that is known at document_start.
+   *
+   * So the script installs its listeners immediately (they must be in place
+   * before the page's own handlers) but every one of them no-ops until
+   * `active` flips. Waiting to attach instead would lose the first submit on a
+   * fast-loading page, which is the one submit a user notices.
+   */
+  let active = false;
+  let ctx = {
+    mode: "enforce",
+    scan: true,
+    siteId: SITE,
+    siteName: SITE,
+    category: "unknown",
+    exempt: new Set(),
+    selectors: null,
+    discovered: false,
+  };
+
+  async function bootstrap() {
+    let policy;
+    try {
+      const res = await api.runtime.sendMessage({ type: "getPolicy" });
+      policy = res?.policy;
+    } catch (_) {
+      policy = null;
+    }
+    // No answer from the worker (evicted, still starting, or an older build)
+    // must not mean "no protection". Fall back to the compiled-in defaults,
+    // which are strictly more restrictive than any sane policy would be.
+    const P = globalThis.DLP_POLICY;
+    const effective = P ? P.mergePolicy(policy) : null;
+    if (!P || !effective) {
+      active = true;
+      return;
+    }
+
+    const r = P.resolve(effective, SITE, PATH);
+    ctx = { ...ctx, ...r, selectors: r.site?.selectors || null };
+
+    if (r.reason === "neverScan") {
+      active = false;
+      return; // hard stop. Never scan means never scan.
+    }
+
+    if (r.site) {
+      active = ctx.mode !== "off";
+      if (active) announce("catalog");
+      return;
+    }
+
+    // Not in the catalog. Only look further if policy asked for it -- in
+    // "catalog" coverage the extension is deliberately blind here, which is
+    // also what keeps the permission ask defensible.
+    if (effective.coverage !== "discover") {
+      active = false;
+      return;
+    }
+
+    globalThis.DLP_DISCOVERY?.watch((result) => {
+      ctx.discovered = true;
+      ctx.mode = P.normalizeMode(effective.unknownSiteMode) || "monitor";
+      active = ctx.mode !== "off";
+      // Report the host regardless of mode. The point of discovery is to learn
+      // where people actually go, and that is worth knowing even when the
+      // decision was to do nothing about it.
+      try {
+        api.runtime.sendMessage({
+          type: "discovery",
+          payload: {
+            site: SITE, path: PATH, title: document.title?.slice(0, 200) || "",
+            score: result.score, signals: result.signals,
+            mode: ctx.mode, ts: new Date().toISOString(),
+          },
+        });
+      } catch (_) {}
+    });
+  }
+
+  function announce(how) {
+    try {
+      api.runtime.sendMessage({
+        type: "presence",
+        payload: {
+          site: SITE, siteId: ctx.siteId, siteName: ctx.siteName,
+          category: ctx.category, mode: ctx.mode, how,
+          engine: BR?.ENGINE || "unknown", ts: new Date().toISOString(),
+        },
+      });
+    } catch (_) {}
+  }
+
+  bootstrap();
 
   /*
    * Send-button identification.
@@ -38,23 +140,62 @@
    * So: explicit send hints match anywhere; type="submit" counts only when the
    * button lives in the same <form> as a composer.
    */
-  const SEND_HINT = 'button[data-testid*="send"], button[aria-label*="Send" i]';
+  /* Broadened from v1's two selectors. Each addition below is a real send
+   * control on at least one catalog site; the aria-label variants matter most
+   * because localized UIs ("Enviar", "Senden") keep the English testid but
+   * translate the label. Ordered cheapest-first is pointless in a selector
+   * list -- the engine handles that -- but keeping them grouped by source
+   * makes it obvious what to delete when a site is dropped. */
+  const SEND_HINT = [
+    'button[data-testid*="send" i]',
+    'button[aria-label*="send" i]',
+    'button[title*="send" i]',
+    'button[data-testid="fruitjuice-send-button"]',   // Microsoft Copilot
+    'button[aria-label*="submit" i]',
+    'button[class*="send-button" i]',
+    'button[id*="send-button" i]',
+    '[role="button"][data-testid*="send" i]',
+  ].join(", ");
+
+  function siteSendHint() {
+    return ctx.selectors?.send ? `${ctx.selectors.send}, ${SEND_HINT}` : SEND_HINT;
+  }
 
   function isSendButton(btn) {
-    if (!btn || btn.tagName !== "BUTTON") return false;
-    if (btn.matches(SEND_HINT)) return true;
+    if (!btn) return false;
+    const hint = siteSendHint();
+    // Some sites use a div[role=button] rather than a real <button>, so the
+    // tag check from v1 is gone -- but the type="submit" fallback below still
+    // requires a real button, because that is where the false-positive risk
+    // lives (see the eight-submit-buttons note above).
+    try {
+      if (btn.matches(hint)) return true;
+    } catch (_) {
+      /* a rotted policy-supplied selector must not break the gate */
+      if (btn.matches(SEND_HINT)) return true;
+    }
+    if (btn.tagName !== "BUTTON") return false;
     if (btn.getAttribute("type") !== "submit") return false;
     const form = btn.closest("form");
     return !!(form && form.querySelector('textarea, [contenteditable="true"]'));
   }
 
   function findSendButton(el) {
+    const hint = siteSendHint();
     const form = el?.closest?.("form");
     if (form) {
-      const b = form.querySelector(`${SEND_HINT}, button[type="submit"]`);
+      const b = safeQuery(form, `${hint}, button[type="submit"]`);
       if (b) return b;
     }
-    return document.querySelector(SEND_HINT);
+    return safeQuery(document, hint);
+  }
+
+  function safeQuery(root, sel) {
+    try {
+      return root.querySelector(sel);
+    } catch (_) {
+      return null;
+    }
   }
 
   const acknowledged = new Set(); // hashes the user chose to send anyway
@@ -73,6 +214,21 @@
   function activePasteRisk() {
     if (pasteRisk && Date.now() - pasteRisk.at > PASTE_RISK_TTL) pasteRisk = null;
     return pasteRisk;
+  }
+
+  /* Messaging that survives a torn-down worker.
+   *
+   * In MV3 the service worker is evicted aggressively, and on Firefox the
+   * event page sleeps too. sendMessage into a dead worker rejects with
+   * "Receiving end does not exist" -- an unhandled rejection that shows up in
+   * the console of every AI site an employee visits and looks, to them, like
+   * the extension is broken. It isn't: the browser respawns the worker and the
+   * next message lands. Swallow it. */
+  function send(msg) {
+    try {
+      const p = api.runtime.sendMessage(msg);
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch (_) {}
   }
 
   function mergeVerdict(v) {
@@ -109,6 +265,18 @@
     const now = Date.now();
     if (composerCache.el && now - composerCache.at < 1000 && composerCache.el.isConnected)
       return composerCache.el;
+
+    // Per-site hint first when policy or catalog supplied one. This is the
+    // escape hatch for sites where "biggest visible text box" picks the wrong
+    // element -- a sidebar note field, a code editor, a search overlay.
+    if (ctx.selectors?.composer) {
+      const hinted = safeQuery(document, ctx.selectors.composer);
+      if (hinted && hinted.offsetParent !== null) {
+        composerCache = { el: hinted, at: now };
+        return hinted;
+      }
+    }
+
     const candidates = [...document.querySelectorAll('textarea, [contenteditable="true"]')]
       .filter((n) => n.offsetParent !== null);
     const best = candidates.sort((a, b) => b.clientHeight - a.clientHeight)[0] || null;
@@ -145,29 +313,73 @@
     };
   }
 
-  function permitted(v) {
-    if (!v || v.severity === null) return false;
-    if (v.severity === "clean") return true;
-    return v.severity === "warn" && acknowledged.has(v.hash);
+  /* Policy-aware verdict.
+   *
+   * v1 asked one question: is the worst finding a block? That is now only the
+   * "enforce" branch of a five-mode decision, and the mode is not knowable
+   * until bootstrap() resolves -- so this returns the ACTION, and callers
+   * branch on it rather than on severity directly.
+   *
+   * Returns { action, findings, exemptCount } where action is
+   * allow | warn | block.
+   */
+  function decide(v) {
+    const P = globalThis.DLP_POLICY;
+    if (!v || v.severity === null) {
+      return { action: "block", findings: v?.findings || [], exemptCount: 0 };
+    }
+    if (!P) {
+      // Fallback matches v1 exactly.
+      const hasBlock = v.findings.some((f) => f.severity === "block");
+      const hasWarn = v.findings.some((f) => f.severity === "warn");
+      return {
+        action: hasBlock ? "block" : hasWarn ? "warn" : "allow",
+        findings: v.findings,
+        exemptCount: 0,
+      };
+    }
+    return P.decide(ctx.mode, v.findings, ctx.exempt);
+  }
+
+  /* An acknowledged warn is permitted; a block never is. Overriding a block
+   * would make "block" a synonym for "warn with extra clicks", which is the
+   * single easiest way to make an enforcement control meaningless. */
+  function permitted(v, d) {
+    if (!v) return false;
+    if (d.action === "allow") return true;
+    return d.action === "warn" && acknowledged.has(v.hash);
   }
 
   /* Fire-and-forget. Never awaited on the submit path. */
-  function report(v, source) {
+  function report(v, source, d) {
     const key = v.hash + "|" + source;
     if (reported.has(key)) return;
     reported.add(key);
     if (reported.size > 500) reported.clear();
 
-    chrome.runtime.sendMessage({
+    const findings = d?.findings || v.findings;
+
+    send({
       type: "event",
       payload: {
         site: SITE,
+        // Stable identifiers so a report can group by tool rather than by
+        // hostname. Grouping by hostname splits "ChatGPT" across chatgpt.com
+        // and chat.openai.com and makes every trend line wrong.
+        siteId: ctx.siteId,
+        siteName: ctx.siteName,
+        category: ctx.category,
+        mode: ctx.mode,
+        action: d?.action || null,
+        discovered: ctx.discovered || false,
+        engine: BR?.ENGINE || "unknown",
+        exemptCount: d?.exemptCount || 0,
         source,
         severity: v.severity,
         charCount: v.text.length,
         promptHash: v.hash,
-        findings: v.findings.map(({ id, label, severity, sample }) => ({
-          id, label, severity, sample,
+        findings: findings.map(({ id, label, severity, sample, exempt }) => ({
+          id, label, severity, sample, exempt: !!exempt,
         })),
         ts: new Date().toISOString(),
       },
@@ -176,17 +388,21 @@
     // Full-capture policy: every prompt is staged so the nightly agent can
     // analyze the user's complete input history, not just flagged items.
     const MAX_STAGE = 262144;
-    chrome.runtime.sendMessage({
+    send({
       type: "stage",
       payload: {
         site: SITE,
+        siteId: ctx.siteId,
+        siteName: ctx.siteName,
+        category: ctx.category,
+        mode: ctx.mode,
         source,
         severity: v.severity,
         promptHash: v.hash,
         fullLength: v.text.length,
         truncated: v.text.length > MAX_STAGE,
         text: v.text.slice(0, MAX_STAGE),
-        findings: v.findings.map(({ id, label, severity }) => ({ id, label, severity })),
+        findings: findings.map(({ id, label, severity }) => ({ id, label, severity })),
         ts: new Date().toISOString(),
       },
     });
@@ -213,8 +429,8 @@
     }
   }
 
-  document.addEventListener("input", scheduleScan, true);
-  document.addEventListener("focusin", scheduleScan, true);
+  document.addEventListener("input", () => { if (active) scheduleScan(); }, true);
+  document.addEventListener("focusin", () => { if (active) scheduleScan(); }, true);
 
   function stop(e) {
     e.preventDefault();
@@ -254,14 +470,15 @@
     // Fast path: we already scanned this exact string.
     if (cached.text === text) {
       const v = mergeVerdict(cached);
-      if (permitted(v)) {
+      const d = decide(v);
+      if (permitted(v, d)) {
         pasteRisk = null; // this send accounts for the pasted content
-        report(v, source);
+        report(v, source, d);
         return; // untouched -- the site's own handler runs normally
       }
       stop(e);
-      report(v, source);
-      showOverlay(v, () => {
+      report(v, source, d);
+      showOverlay(v, d, () => {
         pasteRisk = null;
         submitNow(el);
       });
@@ -273,12 +490,13 @@
     (async () => {
       cached = await computeVerdict(text);
       const v = mergeVerdict(cached);
-      report(v, source);
-      if (permitted(v)) {
+      const d = decide(v);
+      report(v, source, d);
+      if (permitted(v, d)) {
         pasteRisk = null;
         submitNow(el);
       } else {
-        showOverlay(v, () => {
+        showOverlay(v, d, () => {
           pasteRisk = null;
           submitNow(el);
         });
@@ -289,6 +507,7 @@
   document.addEventListener(
     "keydown",
     (e) => {
+      if (!active) return;
       if (replaying || e.__dlpPass) return;
       if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
       if (overlayOpen) return stop(e);
@@ -305,8 +524,12 @@
   document.addEventListener(
     "click",
     (e) => {
+      if (!active) return;
       if (replaying) return;
-      if (!isSendButton(e.target.closest?.("button"))) return;
+      // Widened from button-only: several catalog sites ship a
+      // div[role=button] send control, which closest("button") never finds.
+      const hit = e.target.closest?.('button, [role="button"]');
+      if (!isSendButton(hit)) return;
       if (overlayOpen) return stop(e);
       const el = activeComposer();
       const text = readText(el);
@@ -487,15 +710,17 @@
   }
 
   async function gateFiles(files, clear) {
+    if (!active) return;
     if (!files || !files.length) return;
     const { findings, text } = await assessFiles(files);
     if (!findings.length) return;
 
     const severity = DLP_RULES.worstSeverity(findings);
     const v = { text: text || "", findings, severity, hash: null };
+    const d = decide(v);
     sha256(text || [...files].map((f) => f.name).join(",")).then((h) => {
       v.hash = h;
-      report(v, "attachment");
+      report(v, "attachment", d);
     });
 
     // Enforcement happens at SUBMIT, not at attach time. Reading a ZIP is
@@ -506,11 +731,11 @@
     //
     // This also keeps clean attachments frictionless, which is what stops the
     // tool from being worked around.
-    pasteRisk = { findings, severity, at: Date.now() };
+    pasteRisk = { findings: d.findings, severity, at: Date.now() };
 
-    if (severity === "block") {
+    if (d.action === "block") {
       clear?.(); // best effort -- helps on sites that read the input lazily
-      showOverlay(v, null);
+      showOverlay(v, d, null);
     }
   }
 
@@ -518,6 +743,7 @@
   document.addEventListener(
     "change",
     (e) => {
+      if (!active) return;
       const el = e.target;
       if (!el || el.tagName !== "INPUT" || el.type !== "file") return;
       const files = el.files;
@@ -535,6 +761,7 @@
   document.addEventListener(
     "drop",
     (e) => {
+      if (!active) return;
       const files = e.dataTransfer?.files;
       if (!files || !files.length) return;
       gateFiles(files, null);
@@ -548,6 +775,7 @@
   document.addEventListener(
     "paste",
     (e) => {
+      if (!active) return;
       const pasted = e.clipboardData?.getData("text/plain") || "";
       if (!pasted.trim()) return;
 
@@ -564,28 +792,39 @@
 
       const severity = DLP_RULES.worstSeverity(findings);
       const v = { text: pasted, findings, severity, hash: null };
+      const d = decide(v);
       sha256(pasted).then((h) => {
         v.hash = h;
-        report(v, "paste");
+        report(v, "paste", d);
       });
 
-      if (severity === "block") {
+      if (d.action === "block") {
         // Stop it before the site can relocate it somewhere unreadable.
         stop(e);
-        showOverlay(v, null);
+        showOverlay(v, d, null);
         return;
       }
 
-      // warn: let the paste land, but remember what came in. Even if the site
-      // moves it out of the composer, the submit gate still knows.
-      pasteRisk = { findings, severity, at: Date.now() };
+      // warn (or monitor): let the paste land, but remember what came in. Even
+      // if the site moves it out of the composer, the submit gate still knows.
+      pasteRisk = { findings: d.findings, severity, at: Date.now() };
     },
     true
   );
 
   /* ---------- warning UI ---------- */
 
-  function showOverlay({ severity, findings, hash: h }, onProceed) {
+  /* Findings labels now include file names and, via policy-supplied catalog
+   * entries, strings IT typed into a GPO. Both reach innerHTML below. Neither
+   * is trusted input, so escape. v1 could get away without this because every
+   * label was a literal in rules.js. */
+  function esc(sIn) {
+    return String(sIn)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function showOverlay({ hash: h }, d, onProceed) {
     if (overlayOpen) return;
     overlayOpen = true;
 
@@ -593,10 +832,16 @@
     host.style.cssText = "position:fixed;inset:0;z-index:2147483647;";
     const root = host.attachShadow({ mode: "closed" });
 
-    const blocking = severity === "block";
-    const rows = findings
-      .map((f) => `<li><span class="lbl">${f.label}</span><span class="smp">${f.sample || ""}</span></li>`)
+    // Drive the UI off the POLICY ACTION, not the raw severity. In warn mode a
+    // block-severity finding is a confirm step; showing it as "Blocked" with a
+    // Send anyway button underneath is the kind of mixed message that teaches
+    // people the warnings are theatre.
+    const blocking = d.action === "block";
+    const shown = (d.findings || []).filter((f) => !f.exempt);
+    const rows = shown
+      .map((f) => `<li><span class="lbl">${esc(f.label)}</span><span class="smp">${esc(f.sample || "")}</span></li>`)
       .join("");
+    const findings = shown;
 
     root.innerHTML = `
       <style>
@@ -616,6 +861,7 @@
                  box-sizing:border-box; }
         .hd { padding:20px 24px 8px; flex:0 0 auto; }
         .count { margin-top:6px; font:12px ui-monospace,Menlo,monospace; color:#6b7280; }
+        .dest { margin-top:4px; font:12px ui-monospace,Menlo,monospace; color:#6b7280; }
         .eyebrow { font:600 11px/1 ui-monospace,Menlo,monospace; letter-spacing:.12em;
                    text-transform:uppercase; color:${blocking ? "#b31b1b" : "#b07000"}; }
         h2 { margin:10px 0 0; font-size:19px; font-weight:600; }
@@ -643,7 +889,12 @@
             <p>${blocking
               ? "It was not sent. Remove the items below, or use the county's internal AI tool for this request."
               : "Confirm the items below are safe to share with a public AI service."}</p>
-            <div class="count">${findings.length} item${findings.length === 1 ? "" : "s"} found · press Esc to close</div>
+            <div class="count">${findings.length} item${findings.length === 1 ? "" : "s"} found${
+              d.exemptCount ? ` · ${d.exemptCount} exempt by policy` : ""
+            } · press Esc to close</div>
+            <div class="dest">Destination: ${esc(ctx.siteName)}${
+              ctx.discovered ? " (unrecognized AI site)" : ""
+            }</div>
           </div>
           <ul>${rows}</ul>
           <div class="ft">
@@ -674,10 +925,15 @@
     // above ever throws. Escape is the escape hatch; it declines to send.
     root.getElementById("send")?.addEventListener("click", () => {
       if (h) acknowledged.add(h);
-      chrome.runtime.sendMessage({
+      send({
         type: "event",
-        payload: { site: SITE, source: "override", severity: "override",
-                   promptHash: h, ts: new Date().toISOString() },
+        payload: {
+          site: SITE, siteId: ctx.siteId, siteName: ctx.siteName,
+          category: ctx.category, mode: ctx.mode, action: "override",
+          source: "override", severity: "override",
+          engine: BR?.ENGINE || "unknown",
+          promptHash: h, ts: new Date().toISOString(),
+        },
       });
       close();
       onProceed?.();

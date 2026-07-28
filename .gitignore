@@ -1,1 +1,6 @@
 extension/server-config.js
+dist/
+node_modules/
+*.zip
+.DS_Store
+extension/backend-origins.json

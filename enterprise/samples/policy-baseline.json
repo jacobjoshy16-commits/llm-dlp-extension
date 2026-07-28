@@ -1,0 +1,116 @@
+{
+  "_comment": [
+    "FLEET BASELINE. Start here, deploy to a pilot OU, run in monitor for two",
+    "weeks, then promote. Every threshold below is a starting point, not a",
+    "validated number -- the README says that about the detection rules and it",
+    "is equally true of enforcement modes.",
+    "",
+    "Keys beginning with _ are stripped by the deployment scripts."
+  ],
+
+  "endpoint": "https://dlp.internal.fortbendcountytx.gov/api/events",
+  "reviewEndpoint": "https://dlp.internal.fortbendcountytx.gov/api/review-batch",
+  "policyEndpoint": "https://dlp.internal.fortbendcountytx.gov/api/policy",
+  "policyPullMinutes": 60,
+  "token": "set-from-etc-dlp-dlp.env",
+
+  "_comment_mode": [
+    "enforce = v1 behavior: block-severity findings are refused, warn findings",
+    "get a confirm step. Use monitor for the first two weeks of any rollout --",
+    "you cannot tune a false-positive rate you have never measured, and the",
+    "fastest way to kill the project is to block legitimate work in week one."
+  ],
+  "defaultMode": "enforce",
+
+  "_comment_unknown": [
+    "Sites discovery finds that are not in the catalog. Monitor, deliberately.",
+    "A heuristic that blocks is a heuristic that will one day block the county",
+    "intranet search box fleet-wide."
+  ],
+  "unknownSiteMode": "monitor",
+
+  "_comment_coverage": [
+    "catalog = the ~99 shipped sites plus extraSites. Narrow permission ask,",
+    "reviewable, passes store review.",
+    "discover = also run the heuristic detector on every page. Requires the",
+    "broad build (node tools/build.mjs --coverage broad) and force-install,",
+    "because the permission warning is not something to show a user."
+  ],
+  "coverage": "catalog",
+
+  "_comment_stage": [
+    "all = every prompt is staged for the nightly agent, which is what makes",
+    "the cumulative-disclosure pass in agent_client.py work. flagged-only",
+    "shrinks the review corpus considerably and loses that capability. Pick",
+    "deliberately and write the choice into your retention schedule."
+  ],
+  "stageMode": "all",
+
+  "allowServerExemptions": false,
+
+  "_comment_categories": [
+    "ONLY LIST CATEGORIES THAT DIFFER FROM defaultMode. This is not a style",
+    "preference -- it is load-bearing.",
+    "",
+    "categoryModes outranks defaultMode in the precedence chain. So a baseline",
+    "that spells out every category as \"enforce\" silently NEUTRALIZES every",
+    "departmental override: groupPolicies.legal sets defaultMode=strict, the",
+    "baseline's categoryModes.public_chat=enforce wins, and Legal quietly runs",
+    "at enforce while the policy file says strict. Nothing errors. The options",
+    "page shows the mode as enforce and everyone assumes the file is wrong",
+    "somewhere else.",
+    "",
+    "Restating the default buys nothing and costs that. List deviations only.",
+    "",
+    "The two below are genuine deviations:",
+    "  enterprise_ai / meeting_ai -- sanctioned tenant-bound tools are",
+    "    monitored, not blocked. Blocking the internal assistant is how you",
+    "    push people to their phones: the README's 'give people an approved",
+    "    alternative' point, expressed as configuration.",
+    "  media_ai -- image/audio generation is warn fleet-wide, because the",
+    "    prompt is usually a description rather than a record. Departments",
+    "    that disagree (sheriff) raise it in their own overlay."
+  ],
+  "categoryModes": {
+    "enterprise_ai": "monitor",
+    "meeting_ai": "monitor",
+    "media_ai": "warn"
+  },
+
+  "siteOverrides": {},
+  "extraSites": [],
+  "disabledSites": [],
+  "exemptRules": [],
+  "exemptRulesBySite": {},
+
+  "_comment_never": [
+    "Pages where the extension reading composer text is ITSELF the privacy",
+    "problem. This list wins over every mode including strict. Add your",
+    "county's payroll, benefits, and case-management vendors before pilot --",
+    "the Tyler Technologies entries are there because a case management system",
+    "is exactly where an employee legitimately types an SSN all day."
+  ],
+  "neverScan": [
+    "*.bankofamerica.com",
+    "*.chase.com",
+    "*.wellsfargo.com",
+    "*.adp.com",
+    "*.paychex.com",
+    "*.workday.com",
+    "*.mychart.com",
+    "*.irs.gov",
+    "*.ssa.gov",
+    "*.tylertech.com",
+    "*.tylerhost.net",
+    "*.fortbendcountytx.gov"
+  ],
+
+  "flushSeconds": 30,
+  "eodHour": 17,
+  "eodMinute": 30,
+  "maxQueue": 500,
+  "maxReviewItems": 300,
+  "maxStageAgeHours": 72,
+
+  "workstationTag": "SET-PER-MACHINE-BY-DEPLOY-SCRIPT"
+}
