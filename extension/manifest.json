@@ -3,13 +3,18 @@
   "name": "County LLM Data Guard",
   "version": "0.1.0",
   "description": "Blocks sensitive county data from being submitted to public AI chat services.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "dlp-guard@fortbendcountytx.gov",
+      "strict_min_version": "121.0"
+    }
+  },
   "permissions": [
     "storage",
     "alarms",
     "idle",
     "unlimitedStorage",
-    "identity",
-    "identity.email"
+    "identity"
   ],
   "host_permissions": [
     "http://127.0.0.1:8787/*",
@@ -24,8 +29,6 @@
     "https://poe.com/*",
     "https://x.com/i/grok*",
     "https://huggingface.co/chat/*",
-    "https://dlp.internal.fortbendcountytx.gov/*",
-    "http://localhost:8787/*",
     "https://grok.com/*",
     "https://copilot.cloud.microsoft/*",
     "https://m365.cloud.microsoft/*"
