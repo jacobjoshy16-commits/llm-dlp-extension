@@ -53,8 +53,34 @@
   const MODES = ["off", "monitor", "warn", "enforce", "strict"];
   const RANK = Object.fromEntries(MODES.map((m, i) => [m, i]));
 
+  /* Rules that a mode downgrade must never soften.
+   *
+   * WHY THIS EXISTS: a fleet test caught the same credential leak resolving to
+   * allow / warn / block depending only on which site the employee happened to
+   * pick. The IT overlay sets code_ai:"warn" so stack traces stop being
+   * blocked, and enterprise_ai:"monitor" because the tenant assistant is
+   * sanctioned -- but both also silently un-blocked an API key, which that
+   * overlay's own notes say must "stay live".
+   *
+   * Exemptions were already explicit and auditable. Mode was the hole: it is
+   * coarse, it is set for an unrelated reason, and it silently overrode a
+   * block-severity finding.
+   *
+   * So these keep their teeth regardless of mode. A finding here always at
+   * least warns, and in any enforcing mode it blocks. Two ways to override,
+   * both deliberate and both visible:
+   *   - exemptRules / exemptRulesBySite  (recorded on every event)
+   *   - alwaysEnforceRules: []           (empty the floor explicitly)
+   *
+   * Deliberately short. A long list re-creates the false-positive problem the
+   * modes exist to solve. Only secrets qualify: they are unambiguous, they are
+   * never legitimate in a public prompt, and leaking one is not recoverable by
+   * asking the vendor to delete it. */
+  const ALWAYS_ENFORCE = ["credential", "private_key"];
+
   const DEFAULT_POLICY = {
     defaultMode: "enforce",
+    alwaysEnforceRules: ALWAYS_ENFORCE.slice(),
     // Unknown = a chat-shaped page discovery.js found that is not in the
     // catalog. Default monitor, NOT enforce: a heuristic match blocking a
     // county intranet search box on day one is exactly the incident that gets
@@ -217,7 +243,7 @@
    * makes tuning impossible: you cannot see that an exemption is too broad if
    * the events it swallows never leave the workstation.
    */
-  function decide(mode, findings, exempt) {
+  function decide(mode, findings, exempt, floor = ALWAYS_ENFORCE) {
     const marked = findings.map((f) =>
       exempt?.has(f.id) ? { ...f, exempt: true } : f
     );
@@ -232,16 +258,53 @@
     else if (mode === "enforce") action = hasBlock ? "block" : hasWarn ? "warn" : "allow";
     else if (mode === "warn") action = hasBlock || hasWarn ? "warn" : "allow";
 
+    /* Floor. An exempted rule stays exempt -- that decision was explicit and is
+     * recorded on the event. What this stops is a mode set for an unrelated
+     * reason quietly softening a secret.
+     *
+     * "off" is honoured: it means the extension is not operating on this site
+     * at all (neverScan, a disabled entry), and half-running there would be
+     * worse than not running. Everything above off gets at least a warn. */
+    const floored = new Set(floor || []);
+    if (floored.size && mode !== "off") {
+      const hit = live.find((f) => floored.has(f.id));
+      if (hit) {
+        /* Block, not warn, even in monitor.
+         *
+         * monitor exists so a SANCTIONED tool is not blocked, on the reasoning
+         * that the tenant is covered by a data-processing agreement. That
+         * reasoning holds for county data and does not hold for a secret: a
+         * DPA governs how a vendor handles the data you meant to send them,
+         * and says nothing about an API key you did not mean to send anyone.
+         * A leaked credential is compromised the moment it is pasted,
+         * regardless of destination, and rotating it is the only remedy.
+         *
+         * A 100-box fleet run is what surfaced this -- at 40 boxes the
+         * sanctioned-tenant path came up too rarely to notice. */
+        const raised = "block";
+        if (rank(raised) > rank(action)) {
+          return {
+            action: raised, findings: marked,
+            exemptCount: marked.length - live.length,
+            floored: hit.id,
+          };
+        }
+      }
+    }
+
     return { action, findings: marked, exemptCount: marked.length - live.length };
   }
+
+  const ACTION_RANK = { allow: 0, warn: 1, block: 2 };
+  const rank = (a) => ACTION_RANK[a] ?? 0;
 
   function atLeast(mode, floor) {
     return (RANK[mode] ?? 0) >= (RANK[floor] ?? 0);
   }
 
   const API = {
-    MODES, DEFAULT_POLICY, mergePolicy, effectiveSites, resolve, decide,
-    atLeast, normalizeMode,
+    MODES, DEFAULT_POLICY, ALWAYS_ENFORCE, mergePolicy, effectiveSites, resolve,
+    decide, atLeast, normalizeMode,
   };
 
   globalThis.DLP_POLICY = API;

@@ -625,6 +625,80 @@ test("reset clears history and enforcement memory", () => {
   assert.equal(C.stats().enforcedRules.length, 0);
 });
 
+/* ---------- always-enforce floor ----------
+ *
+ * Found by the fleet test: the SAME credential leak resolved to allow, warn,
+ * or block depending only on which site the employee picked, because category
+ * mode silently downgraded a block-severity secret. The IT overlay's own notes
+ * say credential and private_key must "stay live"; the code did not honour it.
+ */
+
+test("credential blocks even where the category mode says warn", () => {
+  const d = P.decide("warn", [{ id: "credential", severity: "block" }], new Set());
+  assert.equal(d.action, "block");
+  assert.equal(d.floored, "credential");
+});
+
+test("credential BLOCKS even on a monitored sanctioned site", () => {
+  // monitor exists so sanctioned tools are not blocked, because the tenant is
+  // under a data-processing agreement. That covers county data; it does not
+  // cover a secret. A pasted API key is compromised regardless of destination.
+  const d = P.decide("monitor", [{ id: "credential", severity: "block" }], new Set());
+  assert.equal(d.action, "block");
+  assert.equal(d.floored, "credential");
+});
+
+test("private_key is floored the same way", () => {
+  assert.equal(P.decide("warn", [{ id: "private_key", severity: "block" }], new Set()).action,
+               "block");
+});
+
+test("off still means off -- the floor does not resurrect a disabled site", () => {
+  // neverScan and disabled entries must stay fully inert; half-running there
+  // is worse than not running.
+  assert.equal(P.decide("off", [{ id: "credential", severity: "block" }], new Set()).action,
+               "allow");
+});
+
+test("an explicit exemption still overrides the floor", () => {
+  // Exemptions are deliberate and recorded on every event. The floor exists to
+  // stop SILENT downgrades, not to remove admin control.
+  const d = P.decide("warn", [{ id: "credential", severity: "block" }], new Set(["credential"]));
+  assert.equal(d.action, "allow");
+  assert.equal(d.exemptCount, 1);
+});
+
+test("the floor can be emptied explicitly", () => {
+  assert.equal(P.decide("warn", [{ id: "credential", severity: "block" }], new Set(), []).action,
+               "warn");
+});
+
+test("non-floored rules are still softened by mode", () => {
+  // The floor is deliberately short; widening it re-creates the false-positive
+  // problem the modes exist to solve.
+  assert.equal(P.decide("warn", [{ id: "ssn", severity: "block" }], new Set()).action, "warn");
+  assert.equal(P.decide("monitor", [{ id: "ssn", severity: "block" }], new Set()).action, "allow");
+});
+
+test("IT keeps its internal_host exemption after the floor change", () => {
+  const it = forGroup("it");
+  const r = P.resolve(it, "v0.dev", "/");
+  assert.equal(P.decide(r.mode, [{ id: "internal_host", severity: "warn" }], r.exempt).action,
+               "allow");
+});
+
+test("a credential is enforced identically on every catalog site", () => {
+  // The exact inconsistency the fleet run surfaced.
+  const it = forGroup("it");
+  const seen = new Set();
+  for (const host of ["chatgpt.com", "claude.ai", "m365.cloud.microsoft", "v0.dev",
+                      "translate.google.com", "chatpdf.com"]) {
+    const r = P.resolve(it, host, "/");
+    seen.add(P.decide(r.mode, [{ id: "credential", severity: "block" }], r.exempt).action);
+  }
+  assert.ok(!seen.has("allow"), `a secret was allowed somewhere: ${[...seen]}`);
+});
+
 /* ---------- report ---------- */
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

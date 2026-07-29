@@ -29,6 +29,8 @@ import { createContext, runInContext } from "node:vm";
 import { join, resolve } from "node:path";
 
 export class Workstation {
+  static _lock = Promise.resolve();
+
   constructor({ id, employee, engine = "chrome", extDir, endpointBase, token, policy = {} }) {
     this.id = id;
     this.employee = employee;
@@ -194,12 +196,35 @@ export class Workstation {
     return this;
   }
 
-  /* Make this workstation's browser the ambient one.
+  /* Make this workstation's browser the ambient one, for the duration of one
+   * critical section.
    *
-   * Node has a single global, so three "machines" in one process must take
-   * turns. Every entry point calls this first. In a real fleet each box has
-   * its own process and this problem does not exist -- it is a limitation of
-   * the harness, not of the extension. */
+   * Node has a single global, so N "machines" in one process must take turns.
+   * An earlier version just assigned globalThis.chrome and returned -- which is
+   * correct only until two boxes act concurrently. Then box A sets the global,
+   * awaits, box B overwrites it mid-await, and A's events land in B's storage.
+   * In a 3-box test that is invisible; at 12 boxes it showed up as "only 3 of
+   * 12 workstations attributed", which reads exactly like an extension bug.
+   *
+   * A real fleet has one process per box and no such coupling. So serialize
+   * the ambient-global sections here: the harness takes turns, while the
+   * WORK -- scanning, policy, fetch -- still overlaps, which is the part the
+   * concurrency test is actually about.
+   */
+  async withBrowser(fn) {
+    const prev = Workstation._lock;
+    let release;
+    Workstation._lock = new Promise((r) => (release = r));
+    await prev;
+    try {
+      globalThis.chrome = this._chrome();
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  /* Synchronous variant for entry points that do not await. */
   activate() {
     globalThis.chrome = this._chrome();
     return this;
@@ -214,8 +239,11 @@ export class Workstation {
 
   /* One prompt submission. Mirrors gate() in content.js: per-message scan,
    * policy decision, then context ONLY when the message itself allows. */
-  async submit(text, { site = "chatgpt.com", path = "/", source = "submit" } = {}) {
-    this.activate();
+  async submit(text, opts = {}) {
+    return this.withBrowser(() => this._submit(text, opts));
+  }
+
+  async _submit(text, { site = "chatgpt.com", path = "/", source = "submit" } = {}) {
     const { R, P, C } = this.api;
     const policy = await this.resolvePolicy();
     const r = P.resolve(policy, site, path);
@@ -270,7 +298,7 @@ export class Workstation {
 
   /* User clicks "Send anyway" on a warn. */
   async override(text, site = "chatgpt.com") {
-    this.activate();
+    return this.withBrowser(async () => {
     await globalThis.chrome.runtime.sendMessage({
       type: "event",
       payload: {
@@ -280,20 +308,23 @@ export class Workstation {
       },
     });
     this.sent.events++;
+    });
   }
 
   /* ---------- clock ---------- */
 
   async fireAlarm(name) {
-    this.activate();
-    for (const fn of this.listeners.alarm) await fn({ name });
-    await settle();
+    return this.withBrowser(async () => {
+      for (const fn of this.listeners.alarm) await fn({ name });
+      await settle();
+    });
   }
 
   async lockWorkstation() {
-    this.activate();
-    for (const fn of this.listeners.idle) await fn("locked");
-    await settle();
+    return this.withBrowser(async () => {
+      for (const fn of this.listeners.idle) await fn("locked");
+      await settle();
+    });
   }
 
   queueDepth() {

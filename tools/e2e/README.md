@@ -90,3 +90,82 @@ the remaining gap.
 
 Nor is this a load test. Three workstations and a handful of prompts exercise
 correctness, not throughput.
+
+---
+
+# Fleet simulation (`fleet.mjs`)
+
+`run.mjs` proves the pipeline is **correct** with three workstations. `fleet.mjs`
+proves it **survives an enterprise**, which fails for different reasons.
+
+```bash
+npm run e2e:fleet                              # 40 boxes, 9 OUs, 60 days
+node tools/e2e/fleet.mjs --boxes 100 --days 60 # push harder
+```
+
+Each box runs the real content scripts in its own `vm` context with its own
+`background.js` module graph. 9 OUs mirror
+`enterprise/samples/policy-departments.json`, each with a prompt profile
+matching what that department actually types — the only way policy divergence
+shows up as behavior rather than a config diff.
+
+Covers: departmental modes resolving differently per OU, concurrent flush under
+one SQLite writer, a whole-fleet lock storm, 60 days of accumulated archive,
+purge at the boundary on a populated DB, investigator workflow, and the nightly
+jobs at scale.
+
+## Two real bugs this found
+
+**1. Category mode silently downgraded secrets.** The same credential leak
+resolved to `allow`, `warn`, or `block` depending only on which site the
+employee happened to open. IT's overlay sets `code_ai: "warn"` so stack traces
+stop being blocked and `enterprise_ai: "monitor"` because the tenant is
+sanctioned — both also un-blocked API keys, which that overlay's own notes say
+must "stay live".
+
+Fixed with `ALWAYS_ENFORCE` in `policy.js`: `credential` and `private_key`
+block in every mode above `off`. Explicit `exemptRules` still override — the
+floor stops *silent* downgrades, not admin control.
+
+The monitor case needed a second pass. Blocking on a sanctioned tenant seems
+wrong until you separate the two things: a DPA governs how a vendor handles
+data you *meant* to send. It says nothing about an API key you didn't. A pasted
+credential is compromised regardless of destination.
+
+**Only visible at 100 boxes.** At 40 the sanctioned-tenant path came up too
+rarely to notice — the argument for running the fleet test larger than feels
+necessary.
+
+**2. A harness race that looked like an extension bug.** `submit()` set
+`globalThis.chrome`, then awaited; another box overwrote it mid-await, so events
+landed in the wrong storage. Presented as "only 3 of 12 workstations attributed"
+— indistinguishable from broken attribution. Fixed by serializing the
+ambient-global sections (`withBrowser`); the work still overlaps, which is what
+the concurrency test is about. A real fleet has one process per box and no such
+coupling.
+
+## One assertion that was wrong, not the code
+
+"Legal always blocks its leak" failed on `m365.cloud.microsoft`. That is correct
+behavior — legal's overlay sets `enterprise_ai: "warn"` deliberately. The real
+invariant is **never silently allowed**, which is what it now asserts.
+
+## Measured (2-core sandbox — shape, not a benchmark)
+
+| | 40 boxes | 100 boxes |
+|---|---|---|
+| Boot | 7ms/box | 6ms/box |
+| Submit | ~1300/s | ~1960/s |
+| Concurrent flush | 5.7s | 13.0s |
+| Lock storm | 6.0s | 13.3s |
+| Purge (60d) | 47ms | 60ms |
+| Nightly scoring | 106 items / 37ms | 265 items / 42ms |
+
+Flush time scales linearly with box count — SQLite serializes writers, and this
+is where a real fleet will feel it first. `archive.py stats` projects storage
+and warns before the box becomes the problem.
+
+## Still not proven
+
+No browser: DOM interception is untested. And this is a correctness test under
+concurrency, not a load test — a 2-core sandbox is not a county server.
