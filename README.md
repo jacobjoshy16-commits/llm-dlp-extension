@@ -2,7 +2,7 @@
 
 ---
 
-# Start here: what this is, in plain language
+# Start here: 
 
 *This section assumes you know nothing about data security software. No
 background needed. If you're a developer, skip to [For developers](#for-developers).*
