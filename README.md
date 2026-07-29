@@ -181,6 +181,9 @@ That's the whole idea.
 
 # For developers
 
+**New to the codebase? Read [ARCHITECTURE.md](ARCHITECTURE.md) first** — it
+walks through what every file does and how they connect, in plain language.
+
 Browser extension that inspects text before it is submitted to AI services and
 blocks submissions containing protected county data.
 
