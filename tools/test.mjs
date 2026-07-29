@@ -256,8 +256,10 @@ const BLOCK = [{ id: "ssn", severity: "block" }];
 const WARN = [{ id: "dob", severity: "warn" }];
 const NONE = [];
 
-test("monitor never interrupts", () => {
-  assert.equal(P.decide("monitor", BLOCK, new Set()).action, "allow");
+test("monitor never interrupts on contextual findings", () => {
+  // BLOCK here is a floored hard identifier, which monitor no longer softens.
+  assert.equal(P.decide("monitor", WARN, new Set()).action, "allow");
+  assert.equal(P.decide("monitor", BLOCK, new Set()).action, "block");
 });
 
 test("off never interrupts", () => {
@@ -270,8 +272,11 @@ test("enforce reproduces v1 behavior exactly", () => {
   assert.equal(P.decide("enforce", NONE, new Set()).action, "allow");
 });
 
-test("warn mode downgrades a block to a confirm step", () => {
-  assert.equal(P.decide("warn", BLOCK, new Set()).action, "warn");
+test("warn mode downgrades a NON-floored block to a confirm step", () => {
+  // record_header and friends are floored; use a rule that is not.
+  assert.equal(P.decide("warn", [{ id: "dob", severity: "block" }], new Set()).action, "warn");
+  // ...but a hard identifier is not downgradable.
+  assert.equal(P.decide("warn", BLOCK, new Set()).action, "block");
 });
 
 test("strict promotes a warn to a block", () => {
@@ -280,7 +285,9 @@ test("strict promotes a warn to a block", () => {
 });
 
 test("an exempt rule stops enforcing but is still reported", () => {
-  const d = P.decide("enforce", BLOCK, new Set(["ssn"]));
+  // Uses a CONTEXTUAL rule: hard identifiers are no longer exemptable.
+  const d = P.decide("enforce", [{ id: "internal_host", severity: "warn" }],
+                     new Set(["internal_host"]));
   assert.equal(d.action, "allow");
   assert.equal(d.exemptCount, 1);
   // The finding survives in the payload. An exemption that erased its own
@@ -290,9 +297,10 @@ test("an exempt rule stops enforcing but is still reported", () => {
 });
 
 test("exempting one rule does not clear an unrelated finding", () => {
-  const d = P.decide("enforce", [...BLOCK, { id: "credential", severity: "block" }],
-                     new Set(["ssn"]));
-  assert.equal(d.action, "block");
+  const d = P.decide("enforce",
+    [{ id: "internal_host", severity: "warn" }, { id: "medical", severity: "warn" }],
+    new Set(["internal_host"]));
+  assert.equal(d.action, "warn");
   assert.equal(d.exemptCount, 1);
 });
 
@@ -384,11 +392,17 @@ test("IT gets a confirm step on coding assistants, not a block", () => {
   assert.equal(modeAt("general", "v0.dev"), "enforce");
 });
 
-test("pilot group interrupts nobody", () => {
+test("pilot group interrupts nobody -- for CONTEXTUAL findings", () => {
+  // Rewritten. This used to assert that pilot allowed an SSN through, which
+  // was the behaviour, and was wrong: a pilot that permits real disclosures is
+  // an unmonitored gap. monitor now applies to contextual noise only.
   const p = forGroup("pilot");
   const r = P.resolve(p, "chatgpt.com", "/");
   assert.equal(r.mode, "monitor");
-  assert.equal(P.decide(r.mode, [{ id: "ssn", severity: "block" }], r.exempt).action, "allow");
+  assert.equal(P.decide(r.mode, [{ id: "medical", severity: "warn" }], r.exempt).action,
+               "allow");
+  assert.equal(P.decide(r.mode, [{ id: "ssn", severity: "block" }], r.exempt).action,
+               "block");
   assert.equal(p.coverage, "discover");
 });
 
@@ -660,10 +674,19 @@ test("off still means off -- the floor does not resurrect a disabled site", () =
                "allow");
 });
 
-test("an explicit exemption still overrides the floor", () => {
-  // Exemptions are deliberate and recorded on every event. The floor exists to
-  // stop SILENT downgrades, not to remove admin control.
+test("an exemption does NOT override the floor", () => {
+  // Reversed deliberately. Exemptions remain the right tool for contextual
+  // noise, but "this rule is too noisy for my department" is not a coherent
+  // claim about a Luhn-valid card number. Removing a rule from
+  // alwaysEnforceRules is the only way out, and that is an auditable edit.
   const d = P.decide("warn", [{ id: "credential", severity: "block" }], new Set(["credential"]));
+  assert.equal(d.action, "block");
+  assert.equal(d.floored, "credential");
+});
+
+test("exemptions still work for contextual rules", () => {
+  const d = P.decide("enforce", [{ id: "internal_host", severity: "warn" }],
+                     new Set(["internal_host"]));
   assert.equal(d.action, "allow");
   assert.equal(d.exemptCount, 1);
 });
@@ -674,10 +697,13 @@ test("the floor can be emptied explicitly", () => {
 });
 
 test("non-floored rules are still softened by mode", () => {
-  // The floor is deliberately short; widening it re-creates the false-positive
-  // problem the modes exist to solve.
-  assert.equal(P.decide("warn", [{ id: "ssn", severity: "block" }], new Set()).action, "warn");
-  assert.equal(P.decide("monitor", [{ id: "ssn", severity: "block" }], new Set()).action, "allow");
+  // The floor covers hard identifiers only. Contextual rules stay tunable --
+  // flattening those would re-create the false positives that get a tool
+  // uninstalled, which protects nobody.
+  assert.equal(P.decide("warn", [{ id: "medical", severity: "warn" }], new Set()).action, "warn");
+  assert.equal(P.decide("monitor", [{ id: "medical", severity: "warn" }], new Set()).action,
+               "allow");
+  assert.equal(P.decide("monitor", [{ id: "cjis", severity: "warn" }], new Set()).action, "allow");
 });
 
 test("IT keeps its internal_host exemption after the floor change", () => {
@@ -697,6 +723,115 @@ test("a credential is enforced identically on every catalog site", () => {
     seen.add(P.decide(r.mode, [{ id: "credential", severity: "block" }], r.exempt).action);
   }
   assert.ok(!seen.has("allow"), `a secret was allowed somewhere: ${[...seen]}`);
+});
+
+/* ---------- uniform enforcement across departments ----------
+ *
+ * A disclosure is equally bad whichever department causes it. These tests
+ * exist because that was NOT true: the same resident SSN measured as BLOCK in
+ * Legal, WARN in Communications, and ALLOW for Pilot and on the sanctioned
+ * tenant. Three mechanisms were each softening it independently -- defaultMode,
+ * categoryModes, and exemptRules.
+ */
+
+const HARD = [
+  ["ssn", "Resident SSN: 123-45-6789 needs review"],
+  ["credit_card", "card 4111 1111 1111 1111 on file"],
+  ["bank_account", "routing number 123456789 for the transfer"],
+  ["credential", "api_key = sk-abcdef1234567890"],
+  ["private_key", "-----BEGIN RSA PRIVATE KEY-----"],
+];
+
+const ALL_GROUPS = Object.keys(DEPTS.groupPolicies);
+const ALL_SITES = ["chatgpt.com", "claude.ai", "m365.cloud.microsoft", "v0.dev",
+                   "translate.google.com", "chatpdf.com", "www.perplexity.ai"];
+
+test("every hard identifier BLOCKS in every department", () => {
+  for (const [rule, text] of HARD) {
+    for (const g of ALL_GROUPS) {
+      const p = forGroup(g);
+      const r = P.resolve(p, "chatgpt.com", "/");
+      const d = P.decide(r.mode, ctxg.DLP_RULES.scan(text), r.exempt);
+      assert.equal(d.action, "block", `${rule} in ${g} resolved ${d.action}`);
+    }
+  }
+});
+
+test("every hard identifier BLOCKS on every site, including sanctioned", () => {
+  for (const [rule, text] of HARD) {
+    for (const host of ALL_SITES) {
+      const p = forGroup("general");
+      const r = P.resolve(p, host, "/");
+      const d = P.decide(r.mode, ctxg.DLP_RULES.scan(text), r.exempt);
+      assert.equal(d.action, "block", `${rule} on ${host} resolved ${d.action}`);
+    }
+  }
+});
+
+test("the pilot group does not get to leak while it evaluates", () => {
+  // monitor exists to measure false positives before enforcing. A pilot that
+  // permits real disclosures is an unmonitored gap, not a pilot.
+  const p = forGroup("pilot");
+  const r = P.resolve(p, "chatgpt.com", "/");
+  assert.equal(r.mode, "monitor");
+  assert.equal(P.decide(r.mode, ctxg.DLP_RULES.scan("ssn 123-45-6789"), r.exempt).action,
+               "block");
+});
+
+test("an exemption cannot reach a floor rule", () => {
+  // The exact Communications hole: gov_email exempted, warn mode, real SSN.
+  const d = P.decide("warn",
+    [{ id: "ssn", severity: "block" }, { id: "gov_email", severity: "warn" }],
+    new Set(["gov_email", "ssn"]));
+  assert.equal(d.action, "block");
+  assert.equal(d.floored, "ssn");
+});
+
+test("Communications: county email plus a real SSN still blocks", () => {
+  const p = forGroup("communications");
+  const r = P.resolve(p, "chatgpt.com", "/");
+  const text = "Contact jane.doe@fortbendcountytx.gov re: her SSN 123-45-6789";
+  assert.equal(P.decide(r.mode, ctxg.DLP_RULES.scan(text), r.exempt).action, "block");
+});
+
+test("GIS: parcel case number exempt, but DOB-plus-SSN still blocks", () => {
+  const p = forGroup("gis");
+  const r = P.resolve(p, "chatgpt.com", "/");
+  assert.ok(r.exempt.has("case_number"));
+  const text = "Parcel owner ssn 123-45-6789 in case 22-AB-3344";
+  assert.equal(P.decide(r.mode, ctxg.DLP_RULES.scan(text), r.exempt).action, "block");
+});
+
+test("contextual rules REMAIN tunable per department", () => {
+  // The floor must not flatten everything -- that would re-create the false
+  // positives that get a tool uninstalled.
+  const itRes = P.resolve(forGroup("it"), "chatgpt.com", "/");
+  const legalRes = P.resolve(forGroup("legal"), "chatgpt.com", "/");
+  const infra = [{ id: "internal_host", severity: "warn" }];
+  const itAction = P.decide(itRes.mode, infra, itRes.exempt).action;
+  const legalAction = P.decide(legalRes.mode, infra, legalRes.exempt).action;
+  assert.equal(itAction, "allow", "IT should still be able to paste a subnet");
+  assert.notEqual(legalAction, "allow", "Legal should not");
+});
+
+test("IT keeps internal_host relief without losing credential enforcement", () => {
+  const p = forGroup("it");
+  const r = P.resolve(p, "v0.dev", "/");
+  assert.equal(P.decide(r.mode, ctxg.DLP_RULES.scan("server at 10.1.2.5 refused"), r.exempt).action,
+               "allow");
+  assert.equal(P.decide(r.mode, ctxg.DLP_RULES.scan("api_key = sk-abcdef1234567890"), r.exempt).action,
+               "block");
+});
+
+test("the floor covers every block-severity rule in the ruleset", () => {
+  // Guards drift: a new block-severity rule added to rules.js without being
+  // floored would be silently softenable by any department overlay.
+  const blockRules = ctxg.DLP_RULES.RULES
+    .filter((r) => r.severity === "block").map((r) => r.id);
+  const floor = new Set(P.ALWAYS_ENFORCE);
+  const missing = blockRules.filter((id) => !floor.has(id));
+  assert.equal(missing.length, 0,
+    `block-severity rules missing from ALWAYS_ENFORCE: ${missing.join(", ")}`);
 });
 
 /* ---------- report ---------- */

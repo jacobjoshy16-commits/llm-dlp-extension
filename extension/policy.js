@@ -53,30 +53,55 @@
   const MODES = ["off", "monitor", "warn", "enforce", "strict"];
   const RANK = Object.fromEntries(MODES.map((m, i) => [m, i]));
 
-  /* Rules that a mode downgrade must never soften.
+  /* ===================================================================
+   * THE FLOOR: hard identifiers block everywhere, for everyone.
+   * ===================================================================
    *
-   * WHY THIS EXISTS: a fleet test caught the same credential leak resolving to
-   * allow / warn / block depending only on which site the employee happened to
-   * pick. The IT overlay sets code_ai:"warn" so stack traces stop being
-   * blocked, and enterprise_ai:"monitor" because the tenant assistant is
-   * sanctioned -- but both also silently un-blocked an API key, which that
-   * overlay's own notes say must "stay live".
+   * A disclosure is equally bad whichever department causes it. A resident
+   * whose SSN reaches a public LLM is not harmed less because Communications
+   * sent it rather than Legal, and the county's notification obligation does
+   * not change either. So the floor is not a per-department setting.
    *
-   * Exemptions were already explicit and auditable. Mode was the hole: it is
-   * coarse, it is set for an unrelated reason, and it silently overrode a
-   * block-severity finding.
+   * An earlier version had only credential/private_key here, and the result
+   * was indefensible -- measured, not hypothetical. The SAME resident SSN:
    *
-   * So these keep their teeth regardless of mode. A finding here always at
-   * least warns, and in any enforcing mode it blocks. Two ways to override,
-   * both deliberate and both visible:
-   *   - exemptRules / exemptRulesBySite  (recorded on every event)
-   *   - alwaysEnforceRules: []           (empty the floor explicitly)
+   *     legal          BLOCK      communications  WARN
+   *     hr             BLOCK      pilot           ALLOW
+   *     health         BLOCK      (everyone on M365)  ALLOW
    *
-   * Deliberately short. A long list re-creates the false-positive problem the
-   * modes exist to solve. Only secrets qualify: they are unambiguous, they are
-   * never legitimate in a public prompt, and leaking one is not recoverable by
-   * asking the vendor to delete it. */
-  const ALWAYS_ENFORCE = ["credential", "private_key"];
+   * Three separate mechanisms were each independently softening it:
+   *   1. defaultMode        communications ran "warn" fleet-wide
+   *   2. categoryModes      enterprise_ai:"monitor" on the sanctioned tenant
+   *   3. exemptRules        gov_email/case_number turned rules off entirely,
+   *                         and an exempted finding no longer counted toward
+   *                         the verdict at all
+   *
+   * Every rule below is a HARD IDENTIFIER -- a formatted value that is never
+   * legitimate in a prompt to a public AI service, in any job function. There
+   * is no department whose work requires pasting a live SSN or a payment card
+   * into ChatGPT. Because the answer is never "yes", the floor costs nothing
+   * in false positives, which is exactly why it can be absolute.
+   *
+   * WHAT THIS DELIBERATELY DOES NOT COVER: warn-severity rules (dob, medical,
+   * cjis vocabulary, internal_host, gov_email, case_number). Those are
+   * contextual -- "patient" is a leak in Health and a noun everywhere else --
+   * and forcing them fleet-wide is what produces the false positives that get
+   * a tool uninstalled. Departments still tune THOSE. They no longer tune
+   * whether an SSN is allowed to leave.
+   *
+   * Overriding the floor requires emptying alwaysEnforceRules explicitly in
+   * managed policy, which is a visible, auditable act by whoever owns the GPO
+   * -- not a side effect of a mode chosen for an unrelated reason. Ordinary
+   * exemptRules can no longer reach these. */
+  const ALWAYS_ENFORCE = [
+    "ssn", "ssn_bare", "ssn_labeled",   // Social Security numbers
+    "credit_card",                       // payment cards (Luhn-validated)
+    "bank_account",                      // account / routing numbers
+    "tx_dl",                             // driver license
+    "record_header",                     // bulk record exports
+    "bulk_paste",                        // bulk/tabular dumps
+    "credential", "private_key",         // secrets
+  ];
 
   const DEFAULT_POLICY = {
     defaultMode: "enforce",
@@ -244,8 +269,23 @@
    * the events it swallows never leave the workstation.
    */
   function decide(mode, findings, exempt, floor = ALWAYS_ENFORCE) {
+    const floored = new Set(floor || []);
+
+    /* A floor rule cannot be exempted.
+     *
+     * This is the third and last softening path. Marking a finding exempt
+     * removed it from `live`, so the floor check below -- which searched
+     * `live` -- never saw it. Communications exempting gov_email meant
+     * "jane@county.gov re: her SSN 123-45-6789" resolved to WARN: dismissible,
+     * on a real SSN.
+     *
+     * An exemption is a statement that a rule is too noisy for this group's
+     * work. That argument is coherent for contextual rules and incoherent for
+     * a Luhn-valid card number, so the two are now treated differently. To
+     * disable a floor rule you must remove it from alwaysEnforceRules, which
+     * is a deliberate, auditable edit rather than a side effect. */
     const marked = findings.map((f) =>
-      exempt?.has(f.id) ? { ...f, exempt: true } : f
+      exempt?.has(f.id) && !floored.has(f.id) ? { ...f, exempt: true } : f
     );
     const live = marked.filter((f) => !f.exempt);
 
@@ -265,7 +305,6 @@
      * "off" is honoured: it means the extension is not operating on this site
      * at all (neverScan, a disabled entry), and half-running there would be
      * worse than not running. Everything above off gets at least a warn. */
-    const floored = new Set(floor || []);
     if (floored.size && mode !== "off") {
       const hit = live.find((f) => floored.has(f.id));
       if (hit) {

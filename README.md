@@ -442,6 +442,35 @@ Conversation text never leaves the workstation. Findings carry rule ids,
 redacted samples, and message indices — never surrounding text. Staging still
 ships only the current prompt.
 
+## What every department is held to
+
+Hard identifiers **block everywhere, for everyone, in every mode**:
+
+`ssn` · `ssn_bare` · `ssn_labeled` · `credit_card` · `bank_account` · `tx_dl` ·
+`record_header` · `bulk_paste` · `credential` · `private_key`
+
+No departmental overlay can soften them, `exemptRules` cannot reach them, and
+`monitor` does not exempt them. Verified across all 9 sample departments and
+every catalog site.
+
+This is not a tuning decision. A resident whose SSN reaches a public LLM is
+harmed identically whether Legal or Communications sent it, and the county's
+notification obligation is the same either way. There is also no job function
+that requires pasting a live SSN into ChatGPT — so a hard floor costs nothing
+in false positives, which is exactly why it can be absolute.
+
+Overriding it means emptying `alwaysEnforceRules` in managed policy: a visible,
+auditable act by whoever owns the GPO, not a side effect of a mode chosen for
+an unrelated reason.
+
+**Departments still tune contextual rules** — `dob`, `medical`, `cjis`,
+`internal_host`, `gov_email`, `case_number`. Those are genuinely ambiguous
+("patient" is a disclosure in Health and a noun in Facilities), and forcing
+them fleet-wide produces the false positives that get a tool uninstalled.
+
+So: **what counts as a leak is fixed. How much ambient noise a department
+tolerates is tunable.**
+
 ## Enforcement modes
 
 One behavior for everyone is right for a twelve-site pilot and wrong for a

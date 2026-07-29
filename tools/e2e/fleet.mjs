@@ -102,7 +102,12 @@ const PROMPTS = {
   ],
   personnel: [
     ["What is the FMLA notice period?", "clean"],
-    ["Employee dob 04/12/1979 discipline file review", "leak"],
+    // A bare DOB is warn-severity and deliberately NOT floored: it appears in
+    // countless legitimate contexts and forcing it fleet-wide would produce
+    // exactly the false positives that get a tool uninstalled. Labelled
+    // "contextual" so the uniformity check does not demand it block.
+    ["Employee dob 04/12/1979 discipline file review", "contextual"],
+    ["Employee ssn 456-78-9012 for the benefits file", "leak"],
   ],
   cjis: [
     ["How do I format a warrant return?", "clean"],
@@ -289,6 +294,23 @@ async function main() {
    * a given leak must not resolve differently just because of which site the
    * employee happened to open. Secrets must be uniform everywhere; PII may be
    * softened on sanctioned tenants but must never be silently allowed. */
+  /* Cross-department uniformity, measured on real submissions.
+   *
+   * Every box submits from a different OU with a different overlay. A hard
+   * identifier must resolve to the SAME action everywhere -- if Legal blocks
+   * an SSN and Communications warns on it, the resident is harmed identically
+   * and only one of those two departments knows it. */
+  const hardKinds = new Set(["leak", "cred"]);
+  const byKind = {};
+  for (const r of results.filter((x) => hardKinds.has(x.kind))) {
+    (byKind[r.kind] ||= new Set()).add(r.action);
+  }
+  for (const [kind, actions] of Object.entries(byKind)) {
+    check(`'${kind}' resolves identically in every department`,
+          actions.size === 1 && actions.has("block"),
+          `saw ${[...actions].join("/")} across OUs`);
+  }
+
   const secretsAllowed = results.filter((r) => r.kind === "cred" && r.action === "allow");
   check("no secret was allowed anywhere in the fleet", secretsAllowed.length === 0,
         JSON.stringify(secretsAllowed.map((r) => `${r.ou}@${r.site}`)));

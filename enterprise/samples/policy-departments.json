@@ -2,33 +2,41 @@
   "_comment": [
     "DEPARTMENTAL POLICY, one file for the whole fleet.",
     "",
-    "The deploy script sets `group` per OU (or per machine) and every workstation",
-    "picks the matching overlay out of groupPolicies. One GPO, one artifact to",
-    "review, one file in change control -- instead of eleven near-identical",
-    "policy files that drift apart within a quarter.",
+    "The deploy script sets `group` per OU and every workstation picks the",
+    "matching overlay. One GPO, one artifact in change control.",
     "",
-    "WHY DEPARTMENTS NEED DIFFERENT RULES AT ALL",
-    "-------------------------------------------",
-    "A single fleet-wide configuration has to be set for the strictest",
-    "population, which means everyone else lives with false positives. The",
-    "README already names the consequence: 'a tool that blocks legitimate work",
-    "gets uninstalled or worked around within a week.' They cannot uninstall a",
-    "force-installed extension -- so instead they use their phone, and you have",
-    "traded a logged event for an invisible one. That is a worse outcome than",
-    "the false positive.",
+    "WHAT A DEPARTMENT CANNOT CHANGE",
+    "-------------------------------",
+    "Hard identifiers -- SSN, payment card, bank/routing number, driver",
+    "license, bulk record exports, credentials, private keys -- BLOCK in every",
+    "department, on every site, in every mode. No overlay below can soften",
+    "them, and exemptRules cannot reach them. See ALWAYS_ENFORCE in policy.js.",
     "",
-    "Overlay semantics: a group overlay is merged ON TOP of the baseline, so it",
-    "only needs to state its differences. Objects merge key-by-key; arrays",
-    "replace wholesale."
+    "This is not a tuning choice. A disclosure is equally bad whichever",
+    "department causes it: the resident is harmed the same, and the county's",
+    "notification obligation is the same. There is also no job function that",
+    "requires pasting a live SSN into a public AI service, so a hard floor",
+    "costs nothing in false positives.",
+    "",
+    "WHAT A DEPARTMENT CAN STILL CHANGE",
+    "----------------------------------",
+    "Contextual rules -- dob, medical vocabulary, CJIS terms, internal_host,",
+    "gov_email, case_number. These are genuinely noisy in some job functions:",
+    "'patient' is a disclosure in Health and an ordinary noun in Facilities.",
+    "Forcing them fleet-wide produces the false positives that get a tool",
+    "uninstalled or worked around, which protects nobody.",
+    "",
+    "So the split is: WHAT counts as a leak is fixed. HOW MUCH ambient noise a",
+    "department tolerates is tunable.",
+    "",
+    "Overlay semantics: merged ON TOP of the baseline, so an overlay states",
+    "only its differences. Objects merge key-by-key; arrays replace wholesale."
   ],
-
   "defaultMode": "enforce",
   "unknownSiteMode": "monitor",
   "coverage": "catalog",
   "group": "SET-PER-OU-BY-DEPLOY-SCRIPT",
-
   "groupPolicies": {
-
     "legal": {
       "_why": [
         "County Attorney. Privileged material, active litigation, sealed",
@@ -43,7 +51,6 @@
         "meeting_ai": "warn"
       }
     },
-
     "hr": {
       "_why": [
         "Personnel files, discipline, medical and benefits data. Same posture",
@@ -53,7 +60,6 @@
       "defaultMode": "strict",
       "unknownSiteMode": "enforce"
     },
-
     "sheriff": {
       "_why": [
         "CJIS applies. The cjis and cjis_id rules exist for this group above",
@@ -72,7 +78,6 @@
         "meeting_ai": "enforce"
       }
     },
-
     "health": {
       "_why": [
         "HIPAA covered functions. The medical rule is warn-severity by default",
@@ -83,57 +88,72 @@
       "defaultMode": "strict",
       "unknownSiteMode": "enforce"
     },
-
     "it": {
       "_why": [
-        "The one group with a legitimate, daily need to paste text that trips",
-        "internal_host: stack traces, config files, subnet plans. Exempting",
-        "that ONE rule for this group is the difference between a tool they",
-        "use and a tool they route around.",
+        "The one group with a legitimate daily need to paste text that trips",
+        "internal_host: stack traces, config files, subnet plans. Exempting that",
+        "ONE contextual rule is the difference between a tool they use and a tool",
+        "they route around.",
         "",
-        "Note what is NOT exempted: credential and private_key stay live. An",
-        "API key in a paste is the highest-value thing this tool catches, and",
-        "IT is the group most likely to paste one.",
+        "The exemption CANNOT reach hard identifiers. An API key, an SSN, or a",
+        "card number in an IT prompt blocks exactly as it does in Legal's -- the",
+        "floor in policy.js is not exemptable. IT is the group most likely to",
+        "paste a live credential, so this matters here more than anywhere.",
         "",
-        "code_ai is warn rather than enforce because pasting a snippet into a",
-        "coding assistant is the job. The warn step still logs it."
+        "code_ai is warn rather than enforce so a snippet is not refused outright.",
+        "That softens contextual findings only; hard identifiers still block."
       ],
       "defaultMode": "enforce",
-      "exemptRules": ["internal_host"],
+      "exemptRules": [
+        "internal_host"
+      ],
       "categoryModes": {
         "code_ai": "warn",
         "platform": "warn",
         "enterprise_ai": "monitor"
       }
     },
-
     "gis": {
       "_why": [
-        "Parcel and address data is largely public record in Texas. The",
-        "case_number and dob rules fire constantly on parcel exports and",
-        "survey dates, and neither is a disclosure here."
+        "Parcel and address data is largely public record in Texas. case_number",
+        "fires constantly on parcel exports where it means a survey reference, not",
+        "a criminal cause.",
+        "",
+        "Exempting it does NOT weaken PII handling: an SSN or DOB on a parcel",
+        "record still blocks, because those are floor rules."
       ],
       "defaultMode": "enforce",
-      "exemptRules": ["internal_host", "case_number"],
+      "exemptRules": [
+        "internal_host",
+        "case_number"
+      ],
       "categoryModes": {
         "code_ai": "warn"
       }
     },
-
     "communications": {
       "_why": [
-        "Public information office. Their job is producing material intended",
-        "for release, and gov_email fires on every press contact they write.",
-        "Warn mode across the board: log everything, interrupt rarely."
+        "Public information office. Their job is producing material intended for",
+        "release, and gov_email fires on every press contact they write.",
+        "",
+        "warn mode applies to CONTEXTUAL findings only. An earlier version of this",
+        "file let warn mode plus the gov_email exemption downgrade a real SSN to a",
+        "dismissible warning -- 'jane@county.gov re: her SSN 123-45-6789' resolved",
+        "to WARN. That was a genuine hole and it is now closed: hard identifiers",
+        "block here exactly as they do in Legal.",
+        "",
+        "Drafting a press release is lower risk than handling case files. Leaking",
+        "a resident's SSN is not, and the destination does not care who sent it."
       ],
       "defaultMode": "warn",
-      "exemptRules": ["gov_email"],
+      "exemptRules": [
+        "gov_email"
+      ],
       "categoryModes": {
         "media_ai": "warn",
         "writing_ai": "warn"
       }
     },
-
     "general": {
       "_why": [
         "Everyone not in a named group. Deliberately the baseline and nothing",
@@ -143,14 +163,16 @@
       ],
       "defaultMode": "enforce"
     },
-
     "pilot": {
       "_why": [
-        "Rollout group. Monitor everything, block nothing, stage everything.",
-        "Run a department here for two weeks BEFORE enforcing on it, then read",
-        "the morning report and count how many blocks would have been false",
-        "positives. That number is the single most useful thing you can bring",
-        "to the meeting where someone asks whether this is ready."
+        "Rollout group. Monitor CONTEXTUAL findings so a department can be",
+        "measured before enforcement: read the morning report, count how many",
+        "warns would have been false positives, then promote.",
+        "",
+        "monitor does NOT extend to hard identifiers. A pilot user who pastes an",
+        "SSN is still blocked -- 'we were still evaluating' is not a defence to a",
+        "disclosure, and a pilot that permits real leaks is not a pilot, it is an",
+        "unmonitored gap."
       ],
       "defaultMode": "monitor",
       "unknownSiteMode": "monitor",

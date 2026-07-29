@@ -101,24 +101,42 @@ run(general, "chatgpt.com", "I need help with a resident file", "msg 1 of 3");
 run(general, "chatgpt.com", "her ssn is 123-45", "msg 2 (first half)");
 run(general, "chatgpt.com", "6789 what do I do next", "msg 3 (second half)");
 
-head("4. same prompt, different department");
+head("4. hard identifiers: IDENTICAL in every department");
+// The rule that is not negotiable. A resident is harmed the same whichever
+// department leaked their SSN, so no overlay may soften this.
+for (const g of ["legal", "hr", "sheriff", "health", "it", "gis",
+                 "communications", "general", "pilot"]) {
+  C.reset();
+  run(forGroup(g), "chatgpt.com", "Resident SSN: 123-45-6789", g);
+}
+
+head("5. ...including on the sanctioned tenant and in monitor mode");
+for (const [g, host] of [["pilot", "chatgpt.com"], ["it", "m365.cloud.microsoft"],
+                         ["communications", "translate.google.com"]]) {
+  C.reset();
+  run(forGroup(g), host, "card 4111 1111 1111 1111", `${g} @ ${host.split(".")[0]}`);
+}
+
+head("6. contextual rules: departments still differ (this is intended)");
+// Ambient vocabulary, not identifiers. Forcing these fleet-wide is what
+// produces the false positives that get a tool uninstalled.
 for (const g of ["legal", "health", "it", "communications", "pilot"]) {
   C.reset();
   run(forGroup(g), "chatgpt.com", "Patient diagnosis and treatment plan notes", g);
 }
 
-head("5. IT can paste infrastructure, but never a secret");
+head("7. IT can paste infrastructure, but never a secret");
 C.reset();
 run(forGroup("it"), "v0.dev", "server at 10.1.2.5 is refusing connections", "internal host (exempt)");
 run(forGroup("it"), "v0.dev", "api_key = sk-abcdef1234567890", "secret on a warn-mode site");
 run(forGroup("it"), "m365.cloud.microsoft", "api_key = sk-abcdef1234567890", "secret on sanctioned tenant");
 
-head("6. sanctioned tools are monitored, not blocked");
+head("8. sanctioned tools are monitored, not blocked");
 C.reset();
 run(general, "m365.cloud.microsoft", "Summarize this internal policy draft", "M365 Copilot");
 run(general, "chatgpt.com", "Summarize this internal policy draft", "public ChatGPT");
 
-head("7. pages the tool refuses to inspect");
+head("9. pages the tool refuses to inspect");
 run(general, "county.workday.com", "SSN 123-45-6789", "payroll portal");
 run(general, "www.chase.com", "account 123456789", "banking");
 
