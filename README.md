@@ -303,6 +303,62 @@ Only items scored `high` keep their text. Everything the agent clears is
 a reason to hold county records on this box forever. Status moves to `expired`
 and the review file says so rather than showing a blank.
 
+## Prompt archive (optional, 60-day retention)
+
+**Off by default.** Enable only with a records-retention obligation and county
+counsel sign-off, because this is the thing the section above warns about:
+
+> your event database becomes a searchable archive of every SSN and case file
+> an employee ever pasted — a higher-value target than the thing you were
+> protecting
+
+That objection is still correct. `server/archive.py` exists because a retention
+schedule can override it, not because it stopped being true. If metadata alone
+ever satisfies the requirement, delete the file.
+
+```bash
+head -c 32 /dev/urandom | base64 > /etc/dlp/archive.key
+chmod 400 /etc/dlp/archive.key && chown dlp:dlp /etc/dlp/archive.key
+# then set DLP_ARCHIVE=1 in /etc/dlp/dlp.env
+```
+
+What makes it survivable:
+
+| Control | Why |
+|---|---|
+| **AES-256-GCM at rest**, key outside the DB | a stolen `dlp.db` is hashes and timestamps, not resident PII. Without this the backup tape *is* the breach |
+| **No bulk read path** | per-employee only, reason required, capped. An archive you can grep is one that will be grepped |
+| **Every read logged**, log outlives the data | answers "has anyone been reading my prompts" — the question that decides whether this is trusted |
+| **Hard purge at 60 days** | `WAL checkpoint` + `VACUUM`, so purged ciphertext is gone from disk rather than sitting in freed pages |
+| **Legal hold**, named and visible | suspends purge for one employee; shows in retention stats until lifted, so an indefinite hold cannot hide |
+
+`include_text` defaults to **false** — most retention questions (how often,
+which tools, what fired) are answerable from metadata, and answering them
+without decrypting is the difference between a records system and a reading room.
+
+Purge runs nightly at 03:15 via `dlp-purge.timer`, enabled unconditionally: if
+the archive is ever switched on, retention is already being enforced.
+
+```bash
+python3 server/archive.py stats            # posture + size projection
+python3 server/archive.py purge --dry-run  # what would go
+```
+
+**Two open gaps, both real:**
+
+- **Auth.** The shared bearer token proves the caller is on the LAN, nothing
+  more. Tolerable for ingest; **not** tolerable for an endpoint returning
+  readable prompt history. Put these behind mTLS or SSO before enabling.
+  `X-DLP-Actor` is a self-asserted audit label, not an identity.
+- **Scale.** SQLite holds to roughly a few hundred workstations at this
+  retention. `retention_stats()` projects size and warns before the box becomes
+  the problem; the store/history/purge interface is narrow so Postgres can
+  replace it without touching callers.
+
+Note `review_items` still holds brief plaintext while the nightly agent scores
+it — that is pre-existing and unchanged, and those bodies are nulled minutes
+later.
+
 ## Coverage model
 
 Three layers, because no single one is sufficient.

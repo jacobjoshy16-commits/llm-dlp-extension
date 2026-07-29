@@ -10,9 +10,10 @@
     "build:broad": "node tools/build.mjs --coverage broad",
     "package": "node tools/build.mjs --zip && node tools/build.mjs --coverage broad --zip",
     "test": "node tools/test.mjs",
-    "check": "node tools/test.mjs && node tools/build.mjs && node tools/e2e/run.mjs",
+    "check": "node tools/test.mjs && node tools/build.mjs && node tools/e2e/run.mjs && ./.e2e-venv/bin/python tools/e2e/archive_test.py",
     "e2e:setup": "python3 -m venv .e2e-venv && ./.e2e-venv/bin/pip install -q -r server/requirements.txt",
-    "e2e": "node tools/e2e/run.mjs"
+    "e2e": "node tools/e2e/run.mjs",
+    "test:archive": "./.e2e-venv/bin/python tools/e2e/archive_test.py"
   },
   "engines": {
     "node": ">=18"

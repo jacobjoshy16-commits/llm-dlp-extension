@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily prompt-archive retention purge
+
+[Timer]
+# 03:15 local -- after the 17:45 scoring pass and well before the 07:00 report,
+# so a purge never races either. VACUUM briefly locks the database, which is
+# another reason to keep it away from the busy hours.
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

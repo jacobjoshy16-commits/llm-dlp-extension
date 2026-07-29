@@ -31,6 +31,15 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
+# Long-term prompt archive. Optional and OFF unless DLP_ARCHIVE is set --
+# storing full prompt text for 60 days is a records-retention decision with
+# legal consequences, never something a deployment should acquire by upgrading.
+try:
+    import archive
+except Exception as _exc:  # missing cryptography, etc.
+    archive = None
+    print(f"[archive] unavailable, prompt archive disabled: {_exc}")
+
 DB = Path(os.environ.get("DLP_DB", "/var/lib/dlp/dlp.db"))
 DB.parent.mkdir(parents=True, exist_ok=True)
 
@@ -143,6 +152,10 @@ def migrate():
 
 init()
 migrate()
+if archive and archive.ENABLED:
+    archive.init()
+    print(f"[archive] ENABLED -- retaining full prompt text for "
+          f"{archive.RETENTION_DAYS} days, encrypted at rest")
 
 
 @app.get("/health")
@@ -264,9 +277,27 @@ async def review_batch(req: Request, _=Depends(require_token)):
         )
         c.commit()
 
+    # Archive AFTER the review_items commit and BEFORE returning 200.
+    #
+    # Order matters both ways. Archiving first would risk storing text for a
+    # batch that then fails to land in the scoring queue; returning 200 first
+    # would let the extension purge its local copy while the archive write is
+    # still in flight, and a crash in between loses the legal record with no
+    # trace. Both stores commit before the extension is told it is safe to
+    # forget.
+    archived = 0
+    if archive and archive.ENABLED:
+        try:
+            archived = archive.store(payload.get("items", []), payload.get("engine"))
+        except Exception as exc:
+            # A broken archive must not block the DLP pipeline -- but it must
+            # be loud, because silently not retaining is the failure mode that
+            # gets discovered during discovery.
+            print(f"[archive] STORE FAILED for batch {batch_id}: {exc}")
+
     # 200 is the extension's signal to purge its local copy. Only return it
     # once the rows are committed, or you will lose the batch.
-    return {"batchId": batch_id, "accepted": len(rows)}
+    return {"batchId": batch_id, "accepted": len(rows), "archived": archived}
 
 
 # ---------------------------------------------------------------------------
@@ -356,3 +387,111 @@ async def coverage(days: int = 7, _=Depends(require_token)):
         ],
         "uncatalogued": [r[0] for r in rows if r[5]],
     }
+
+
+# ---------------------------------------------------------------------------
+# Prompt archive (60-day retention)
+# ---------------------------------------------------------------------------
+#
+# These endpoints exist only when DLP_ARCHIVE is enabled. They are deliberately
+# NARROW: per-employee reads with a mandatory reason, no bulk export, no
+# cross-employee search. Adding either is a few lines and would convert a
+# retention store into a surveillance tool -- the friction is the control.
+#
+# AUTHENTICATION IS THE OPEN GAP HERE. The shared bearer token proves the
+# caller is on the LAN, nothing more, and the README already says so about the
+# ingest endpoints. For ingest that is a tolerable stopgap. For an endpoint
+# that returns an employee's readable prompt history it is NOT: any workstation
+# can read the token out of the extension folder and then read anyone's
+# history. Put these behind mTLS with per-analyst client certs, or behind the
+# county SSO proxy, before enabling the archive in production. The X-DLP-Actor
+# header below is an audit label, not an identity -- it is self-asserted.
+
+def _require_archive():
+    if not archive or not archive.ENABLED:
+        raise HTTPException(status_code=404, detail="prompt archive is not enabled")
+
+
+@app.get("/api/archive/history/{employee}")
+async def archive_history(
+    employee: str,
+    request: Request,
+    day_from: str | None = None,
+    day_to: str | None = None,
+    include_text: bool = False,
+    limit: int = 100,
+    _=Depends(require_token),
+):
+    """One employee's prompt history. Every call is logged.
+
+    include_text defaults to FALSE. Most retention questions -- how often, which
+    tools, what rules fired -- are answerable from metadata, and answering them
+    without decrypting anything is the difference between a records system and
+    a reading room.
+    """
+    _require_archive()
+    actor = request.headers.get("X-DLP-Actor", "").strip()
+    reason = request.headers.get("X-DLP-Reason", "").strip()
+    if not actor or not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="X-DLP-Actor and X-DLP-Reason headers are required. "
+                   "Archive reads are logged against a named person and purpose.",
+        )
+    try:
+        items = archive.history(
+            employee, actor, reason, day_from, day_to, include_text, limit
+        )
+    except archive.ArchiveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"employee": employee, "count": len(items),
+            "includedText": include_text, "items": items}
+
+
+@app.get("/api/archive/stats")
+async def archive_stats(_=Depends(require_token)):
+    """Retention posture. Safe to expose to monitoring -- no prompt content."""
+    _require_archive()
+    return archive.retention_stats()
+
+
+@app.get("/api/archive/access-log")
+async def archive_access_log(limit: int = 200, _=Depends(require_token)):
+    """Who read whose prompts.
+
+    The answer to "has anyone been going through my history", which is the
+    question that decides whether this system is trusted. Deliberately readable
+    by anyone who can reach the API: an access log that only the people doing
+    the accessing can see is not an accountability control.
+    """
+    _require_archive()
+    with closing(archive.db()) as c:
+        rows = c.execute(
+            "SELECT at, actor, subject, reason, rows_returned, decrypted "
+            "FROM archive_access ORDER BY at DESC LIMIT ?",
+            (max(1, min(limit, 1000)),),
+        ).fetchall()
+    return {"accesses": [
+        {"at": r[0], "actor": r[1], "subject": r[2], "reason": r[3],
+         "rows": r[4], "decrypted": bool(r[5])}
+        for r in rows
+    ]}
+
+
+@app.post("/api/archive/hold/{employee}")
+async def archive_hold(employee: str, request: Request, _=Depends(require_token)):
+    """Place or release a legal hold, suspending purge for one employee."""
+    _require_archive()
+    actor = request.headers.get("X-DLP-Actor", "").strip()
+    reason = request.headers.get("X-DLP-Reason", "").strip()
+    if not actor or not reason:
+        raise HTTPException(status_code=400,
+                            detail="X-DLP-Actor and X-DLP-Reason are required")
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    if body.get("release"):
+        return archive.release_hold(employee, actor)
+    return archive.place_hold(employee, actor, reason)

@@ -36,6 +36,9 @@ const KEEP = process.argv.includes("--keep");
 const PORT = 8791 + Math.floor(Math.random() * 40);
 const BASE = `http://127.0.0.1:${PORT}`;
 const TOKEN = "e2e-token-" + Math.random().toString(36).slice(2, 10);
+const ARCHIVE_KEY = Buffer.from(
+  Array.from({ length: 32 }, () => Math.floor(Math.random() * 256))
+).toString("base64");
 
 /* Interpreter for the server side. Prefer a venv inside the repo (created by
  * `npm run e2e:setup`) so the test is reproducible on a clean machine; fall
@@ -70,7 +73,11 @@ async function boot() {
     UVICORN,
     ["receiver:app", "--host", "127.0.0.1", "--port", String(PORT), "--log-level", "warning"],
     { cwd: SERVER, env: { ...process.env, DLP_DB: DB, DLP_TOKEN: TOKEN,
-                          DLP_POLICY_FILE: join(work, "fleet-policy.json") } }
+                          DLP_POLICY_FILE: join(work, "fleet-policy.json"),
+                          // Exercise the 60-day archive over real HTTP.
+                          DLP_ARCHIVE: "1",
+                          DLP_ARCHIVE_KEY: ARCHIVE_KEY,
+                          DLP_ARCHIVE_RETENTION_DAYS: "60" } }
   );
   server.stderr.on("data", (d) => {
     const s = d.toString();
@@ -269,7 +276,73 @@ async function main() {
     check("reviewer file carries the text a human needs", rhtml.length > 200);
   }
 
-  section("9. resilience");
+  section("9. prompt archive (60-day retention)");
+  const H = { Authorization: `Bearer ${TOKEN}` };
+  const AUDIT = { ...H, "X-DLP-Actor": "e2e-analyst", "X-DLP-Reason": "pipeline test" };
+
+  const astats = await (await fetch(`${BASE}/api/archive/stats`, { headers: H })).json();
+  check("archive enabled and storing", astats.enabled && astats.rows > 0,
+        JSON.stringify({ rows: astats.rows, emp: astats.employees }));
+  check("archive retention is 60 days", astats.retentionDays === 60, String(astats.retentionDays));
+  check("archive covers multiple employees", astats.employees >= 3, String(astats.employees));
+
+  const meta = await (await fetch(
+    `${BASE}/api/archive/history/${encodeURIComponent(a.id)}`, { headers: AUDIT })).json();
+  check("per-employee history returns rows", meta.count > 0, String(meta.count));
+  check("metadata read carries NO prompt text",
+        meta.items.every((i) => i.text === undefined));
+
+  const full = await (await fetch(
+    `${BASE}/api/archive/history/${encodeURIComponent(a.id)}?include_text=true`,
+    { headers: AUDIT })).json();
+  check("explicit include_text returns the prompt", full.items.some((i) => i.text));
+  check("archived text is the real submission",
+        full.items.some((i) => (i.text || "").includes("123-45-6789")));
+
+  const noHdr = await fetch(`${BASE}/api/archive/history/${encodeURIComponent(a.id)}`,
+                            { headers: H });
+  check("read refused without actor/reason headers", noHdr.status === 400, String(noHdr.status));
+
+  const log = await (await fetch(`${BASE}/api/archive/access-log`, { headers: H })).json();
+  // Two SUCCESSFUL reads happened (metadata, then include_text). The third
+  // attempt was rejected for missing headers before it touched any data, so it
+  // correctly produces no log entry -- there was no access to record.
+  check("every successful read was logged", log.accesses.length === 2,
+        String(log.accesses.length));
+  check("log records actor, subject and reason",
+        log.accesses[0].actor === "e2e-analyst" && !!log.accesses[0].subject
+        && !!log.accesses[0].reason);
+  check("log distinguishes decrypted reads",
+        log.accesses.some((x) => x.decrypted === true));
+
+  /* Encryption at rest, checked against the column rather than the file.
+   *
+   * A whole-file grep is the wrong test here and initially failed for a
+   * misleading reason: review_items -- the short-lived SCORING QUEUE that
+   * predates this work -- holds plaintext bodies until eod_review.py nulls
+   * them minutes later. That is existing, documented behaviour, not an
+   * archive leak. Asserting on the file conflates the two stores and would
+   * fail forever for a reason the archive cannot fix.
+   *
+   * So assert the precise claim: no row in prompt_archive contains readable
+   * prompt text. */
+  const leaked = sql(
+    "SELECT COUNT(*) FROM prompt_archive WHERE CAST(body_enc AS TEXT) LIKE '%123-45-6789%'"
+  );
+  check("ARCHIVE COLUMN HOLDS NO READABLE TEXT", leaked === 0,
+        "prompt_archive is storing plaintext -- encryption is not working");
+  const encRows = sql("SELECT COUNT(*) FROM prompt_archive WHERE body_enc IS NOT NULL");
+  check("archive rows carry ciphertext", encRows > 0, String(encRows));
+
+  const hold = await fetch(`${BASE}/api/archive/hold/${encodeURIComponent(b.id)}`,
+    { method: "POST", headers: { ...AUDIT, "Content-Type": "application/json" },
+      body: JSON.stringify({}) });
+  check("legal hold can be placed", hold.ok);
+  const held = await (await fetch(`${BASE}/api/archive/stats`, { headers: H })).json();
+  check("hold is visible in retention stats",
+        held.activeHolds.some((x) => x.employee === b.id));
+
+  section("10. resilience");
   // Server unreachable: events must queue, not vanish.
   server.kill("SIGTERM");
   await settle(400);

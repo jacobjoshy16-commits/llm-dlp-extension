@@ -26,7 +26,7 @@ id dlp &>/dev/null || useradd --system --home "$APP_DIR" --shell /usr/sbin/nolog
 
 echo "==> directories"
 mkdir -p "$APP_DIR" "$DATA_DIR" "$CONF_DIR"
-install -m 644 receiver.py eod_review.py agent_client.py morning_report.py dlp_policy_bridge.py requirements.txt "$APP_DIR/"
+install -m 644 receiver.py eod_review.py agent_client.py morning_report.py dlp_policy_bridge.py archive.py requirements.txt "$APP_DIR/"
 
 echo "==> virtualenv"
 python3 -m venv "$APP_DIR/venv"
@@ -43,6 +43,12 @@ if [[ ! -f "$CONF_DIR/dlp.env" ]]; then
     printf 'OLLAMA_HOST=http://127.0.0.1:11434\n'
     printf 'DLP_SMTP=\n'
     printf 'DLP_MAIL_TO=\n'
+    printf '# Prompt archive -- OFF by default. Storing full prompt text for\n'
+    printf '# 60 days is a records-retention decision; read server/archive.py\n'
+    printf '# and get county counsel sign-off before setting this to 1.\n'
+    printf 'DLP_ARCHIVE=\n'
+    printf 'DLP_ARCHIVE_RETENTION_DAYS=60\n'
+    printf 'DLP_ARCHIVE_KEY_FILE=/etc/dlp/archive.key\n'
   } > "$CONF_DIR/dlp.env"
   echo "    generated a new token"
 else
@@ -55,11 +61,16 @@ chown -R dlp:dlp "$APP_DIR" "$DATA_DIR"
 
 echo "==> systemd"
 install -m 644 dlp-receiver.service dlp-eod.service dlp-eod.timer \
-        dlp-report.service dlp-report.timer /etc/systemd/system/
+        dlp-report.service dlp-report.timer \
+        dlp-purge.service dlp-purge.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now dlp-receiver.service
 systemctl enable --now dlp-eod.timer
 systemctl enable --now dlp-report.timer
+# Purge timer is enabled unconditionally: if the archive is ever switched on,
+# retention must already be enforced. A retention policy that has to be
+# remembered separately is a retention policy that gets forgotten.
+systemctl enable --now dlp-purge.timer
 
 echo "==> timezone check"
 timedatectl show -p Timezone --value | grep -q '^America/Chicago$' \
@@ -78,3 +89,8 @@ echo "  3. Wire score_with_agent() in $APP_DIR/eod_review.py to your agent"
 echo "  4. ollama pull \$DLP_MODEL"
 echo "  5. Set DLP_SMTP and DLP_MAIL_TO in /etc/dlp/dlp.env for the morning report"
 echo "  6. curl -s http://127.0.0.1:8787/health"
+echo "  7. OPTIONAL prompt archive (60-day full-text retention):"
+echo "       head -c 32 /dev/urandom | base64 > /etc/dlp/archive.key"
+echo "       chmod 400 /etc/dlp/archive.key && chown dlp:dlp /etc/dlp/archive.key"
+echo "       set DLP_ARCHIVE=1 in /etc/dlp/dlp.env, then restart dlp-receiver"
+echo "       -- read server/archive.py first; this stores readable PII"
