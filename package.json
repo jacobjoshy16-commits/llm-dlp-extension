@@ -1,0 +1,23 @@
+{
+  "name": "llm-dlp-extension",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Browser DLP for public AI chat services. Blocks sensitive county data before submission.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "build:broad": "node tools/build.mjs --coverage broad",
+    "package": "node tools/build.mjs --zip && node tools/build.mjs --coverage broad --zip",
+    "test": "node tools/test.mjs",
+    "check": "node tools/test.mjs && node tools/build.mjs && node tools/e2e/run.mjs && node tools/e2e/fleet.mjs --boxes 40 --days 60 && ./.e2e-venv/bin/python tools/e2e/archive_test.py",
+    "e2e:setup": "python3 -m venv .e2e-venv && ./.e2e-venv/bin/pip install -q -r server/requirements.txt",
+    "e2e": "node tools/e2e/run.mjs",
+    "test:archive": "./.e2e-venv/bin/python tools/e2e/archive_test.py",
+    "e2e:fleet": "node tools/e2e/fleet.mjs --boxes 40 --days 60",
+    "demo": "node tools/build.mjs --target chrome >/dev/null && node tools/e2e/demo.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

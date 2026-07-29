@@ -1,0 +1,19 @@
+[Unit]
+Description=LLM Data Guard archive retention purge
+After=network.target
+
+[Service]
+Type=oneshot
+User=dlp
+WorkingDirectory=/opt/dlp
+EnvironmentFile=/etc/dlp/dlp.env
+ExecStart=/opt/dlp/venv/bin/python /opt/dlp/archive.py purge
+
+# Holds county records. Same confinement as the receiver.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dlp
+# The archive key is read-only and must not be writable by this job.
+ReadOnlyPaths=/etc/dlp

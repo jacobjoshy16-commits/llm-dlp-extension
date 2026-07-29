@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "AWS CLOUD FLEET BASELINE. Deployed via Microsoft Intune, GPO, or macOS",
+    "Configuration Profiles to point Chrome/Edge extensions to the AWS Application",
+    "Load Balancer (ALB) or API Gateway HTTPS endpoints.",
+    "",
+    "All local detection rules, ALWAYS_ENFORCE floor rules, conversation context,",
+    "and file/paste inspection run identically on the local workstation."
+  ],
+  "endpoint": "https://dlp.county.gov/api/events",
+  "reviewEndpoint": "https://dlp.county.gov/api/review-batch",
+  "policyEndpoint": "https://dlp.county.gov/api/policy",
+  "policyPullMinutes": 60,
+  "token": "arn:aws:secretsmanager:us-east-1:123456789012:secret:dlp-bearer-token",
+  "defaultMode": "enforce",
+  "unknownSiteMode": "monitor",
+  "coverage": "catalog",
+  "stageMode": "all",
+  "contextMode": "off",
+  "contextWindow": 5,
+  "allowServerExemptions": false,
+  "categoryModes": {
+    "enterprise_ai": "monitor",
+    "meeting_ai": "monitor",
+    "media_ai": "warn"
+  },
+  "siteOverrides": {},
+  "extraSites": [],
+  "disabledSites": [],
+  "exemptRules": [],
+  "exemptRulesBySite": {},
+  "neverScan": [
+    "*.bankofamerica.com",
+    "*.chase.com",
+    "*.wellsfargo.com",
+    "*.adp.com",
+    "*.paychex.com",
+    "*.workday.com",
+    "*.mychart.com",
+    "*.irs.gov",
+    "*.ssa.gov",
+    "*.tylertech.com",
+    "*.tylerhost.net",
+    "*.county.gov"
+  ],
+  "flushSeconds": 30,
+  "eodHour": 17,
+  "eodMinute": 30,
+  "maxQueue": 500,
+  "maxReviewItems": 300,
+  "maxStageAgeHours": 72,
+  "workstationTag": "SET-PER-MACHINE-BY-DEPLOY-SCRIPT"
+}

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>County LLM Data Guard — status</title>
+<style>
+  :root { color-scheme: light; }
+  body { font: 14px/1.55 -apple-system, Segoe UI, Roboto, sans-serif;
+         margin: 0; padding: 32px; color: #14171c; background: #f6f7f9; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #6b7280; margin: 0 0 28px; }
+  section { background: #fff; border: 1px solid #e3e6ea; padding: 20px 24px;
+            margin-bottom: 18px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em;
+       color: #6b7280; margin: 0 0 14px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: 7px 0; border-bottom: 1px solid #eef0f3;
+           vertical-align: top; }
+  th { font-weight: 500; color: #6b7280; width: 40%; }
+  code, .mono { font: 12px ui-monospace, Menlo, monospace; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px;
+          font: 11px ui-monospace, Menlo, monospace; }
+  .off      { background: #eef0f3; color: #6b7280; }
+  .monitor  { background: #e6f0fb; color: #14539a; }
+  .warn     { background: #fdf1dc; color: #8a5600; }
+  .enforce  { background: #fde8e8; color: #a01c1c; }
+  .strict   { background: #2b2f36; color: #fff; }
+  .ok  { color: #1a7f45; }
+  .bad { color: #a01c1c; }
+  .note { color: #6b7280; font-size: 13px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>County LLM Data Guard</h1>
+  <p class="sub">
+    Read-only status. Configuration comes from enterprise policy, not from this
+    page — an employee-editable DLP setting is not a control.
+  </p>
+
+  <section>
+    <h2>This workstation</h2>
+    <table id="env"></table>
+  </section>
+
+  <section>
+    <h2>Active policy</h2>
+    <table id="policy"></table>
+    <p class="note" id="policy-note"></p>
+  </section>
+
+  <section>
+    <h2>Coverage</h2>
+    <table id="coverage"></table>
+  </section>
+
+  <section>
+    <h2>Queue</h2>
+    <table id="queue"></table>
+    <p class="note">
+      Items pending upload. A non-zero count that never drains usually means the
+      backend origin is missing from <code>host_permissions</code> — the fetch is
+      blocked before it leaves the browser and looks identical to a server outage.
+    </p>
+  </section>
+
+  <section>
+    <h2>Unrecognized AI sites seen today</h2>
+    <table id="discovered"></table>
+    <p class="note">
+      Detected heuristically in discover mode. These are reported, not blocked.
+      Promote one to enforcement by adding it to the catalog or to
+      <code>siteOverrides</code> in policy.
+    </p>
+  </section>
+</main>
+<script src="browser-compat.js"></script>
+<script src="sites.js"></script>
+<script src="policy.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

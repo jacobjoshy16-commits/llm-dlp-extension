@@ -1,0 +1,183 @@
+{
+  "_comment": [
+    "DEPARTMENTAL POLICY, one file for the whole fleet.",
+    "",
+    "The deploy script sets `group` per OU and every workstation picks the",
+    "matching overlay. One GPO, one artifact in change control.",
+    "",
+    "WHAT A DEPARTMENT CANNOT CHANGE",
+    "-------------------------------",
+    "Hard identifiers -- SSN, payment card, bank/routing number, driver",
+    "license, bulk record exports, credentials, private keys -- BLOCK in every",
+    "department, on every site, in every mode. No overlay below can soften",
+    "them, and exemptRules cannot reach them. See ALWAYS_ENFORCE in policy.js.",
+    "",
+    "This is not a tuning choice. A disclosure is equally bad whichever",
+    "department causes it: the resident is harmed the same, and the county's",
+    "notification obligation is the same. There is also no job function that",
+    "requires pasting a live SSN into a public AI service, so a hard floor",
+    "costs nothing in false positives.",
+    "",
+    "WHAT A DEPARTMENT CAN STILL CHANGE",
+    "----------------------------------",
+    "Contextual rules -- dob, medical vocabulary, CJIS terms, internal_host,",
+    "gov_email, case_number. These are genuinely noisy in some job functions:",
+    "'patient' is a disclosure in Health and an ordinary noun in Facilities.",
+    "Forcing them fleet-wide produces the false positives that get a tool",
+    "uninstalled or worked around, which protects nobody.",
+    "",
+    "So the split is: WHAT counts as a leak is fixed. HOW MUCH ambient noise a",
+    "department tolerates is tunable.",
+    "",
+    "Overlay semantics: merged ON TOP of the baseline, so an overlay states",
+    "only its differences. Objects merge key-by-key; arrays replace wholesale."
+  ],
+  "defaultMode": "enforce",
+  "unknownSiteMode": "monitor",
+  "coverage": "catalog",
+  "group": "SET-PER-OU-BY-DEPLOY-SCRIPT",
+  "groupPolicies": {
+    "legal": {
+      "_why": [
+        "County Attorney. Privileged material, active litigation, sealed",
+        "records. Strict means warn-severity findings block too, and an",
+        "uninspectable attachment is refused rather than flagged -- for this",
+        "group 'we could not read the PDF' is not an acceptable outcome."
+      ],
+      "defaultMode": "strict",
+      "unknownSiteMode": "enforce",
+      "categoryModes": {
+        "enterprise_ai": "warn",
+        "meeting_ai": "warn"
+      }
+    },
+    "hr": {
+      "_why": [
+        "Personnel files, discipline, medical and benefits data. Same posture",
+        "as legal, except HR genuinely lives in Workday all day -- which is",
+        "already in neverScan, so nothing here needs to loosen for it."
+      ],
+      "defaultMode": "strict",
+      "unknownSiteMode": "enforce"
+    },
+    "sheriff": {
+      "_why": [
+        "CJIS applies. The cjis and cjis_id rules exist for this group above",
+        "all others, and the FBI CJIS Security Policy makes disclosure to a",
+        "third-party service a reportable event, not a policy preference.",
+        "",
+        "Note media_ai is enforced here rather than warned: an investigator",
+        "uploading a suspect photo to an image tool is a real scenario and it",
+        "is not one to leave to a confirm dialog."
+      ],
+      "defaultMode": "strict",
+      "unknownSiteMode": "enforce",
+      "categoryModes": {
+        "media_ai": "strict",
+        "enterprise_ai": "warn",
+        "meeting_ai": "enforce"
+      }
+    },
+    "health": {
+      "_why": [
+        "HIPAA covered functions. The medical rule is warn-severity by default",
+        "because the vocabulary is noisy in general office use -- but in this",
+        "department a prompt containing 'patient' and 'diagnosis' is exactly",
+        "what needs stopping, so strict promotes it to a block."
+      ],
+      "defaultMode": "strict",
+      "unknownSiteMode": "enforce"
+    },
+    "it": {
+      "_why": [
+        "The one group with a legitimate daily need to paste text that trips",
+        "internal_host: stack traces, config files, subnet plans. Exempting that",
+        "ONE contextual rule is the difference between a tool they use and a tool",
+        "they route around.",
+        "",
+        "The exemption CANNOT reach hard identifiers. An API key, an SSN, or a",
+        "card number in an IT prompt blocks exactly as it does in Legal's -- the",
+        "floor in policy.js is not exemptable. IT is the group most likely to",
+        "paste a live credential, so this matters here more than anywhere.",
+        "",
+        "code_ai is warn rather than enforce so a snippet is not refused outright.",
+        "That softens contextual findings only; hard identifiers still block."
+      ],
+      "defaultMode": "enforce",
+      "exemptRules": [
+        "internal_host"
+      ],
+      "categoryModes": {
+        "code_ai": "warn",
+        "platform": "warn",
+        "enterprise_ai": "monitor"
+      }
+    },
+    "gis": {
+      "_why": [
+        "Parcel and address data is largely public record in Texas. case_number",
+        "fires constantly on parcel exports where it means a survey reference, not",
+        "a criminal cause.",
+        "",
+        "Exempting it does NOT weaken PII handling: an SSN or DOB on a parcel",
+        "record still blocks, because those are floor rules."
+      ],
+      "defaultMode": "enforce",
+      "exemptRules": [
+        "internal_host",
+        "case_number"
+      ],
+      "categoryModes": {
+        "code_ai": "warn"
+      }
+    },
+    "communications": {
+      "_why": [
+        "Public information office. Their job is producing material intended for",
+        "release, and gov_email fires on every press contact they write.",
+        "",
+        "warn mode applies to CONTEXTUAL findings only. An earlier version of this",
+        "file let warn mode plus the gov_email exemption downgrade a real SSN to a",
+        "dismissible warning -- 'jane@county.gov re: her SSN 123-45-6789' resolved",
+        "to WARN. That was a genuine hole and it is now closed: hard identifiers",
+        "block here exactly as they do in Legal.",
+        "",
+        "Drafting a press release is lower risk than handling case files. Leaking",
+        "a resident's SSN is not, and the destination does not care who sent it."
+      ],
+      "defaultMode": "warn",
+      "exemptRules": [
+        "gov_email"
+      ],
+      "categoryModes": {
+        "media_ai": "warn",
+        "writing_ai": "warn"
+      }
+    },
+    "general": {
+      "_why": [
+        "Everyone not in a named group. Deliberately the baseline and nothing",
+        "more -- if a department needs an exception, give it a group so the",
+        "exception is visible in change control rather than quietly widening",
+        "the default for the whole county."
+      ],
+      "defaultMode": "enforce"
+    },
+    "pilot": {
+      "_why": [
+        "Rollout group. Monitor CONTEXTUAL findings so a department can be",
+        "measured before enforcement: read the morning report, count how many",
+        "warns would have been false positives, then promote.",
+        "",
+        "monitor does NOT extend to hard identifiers. A pilot user who pastes an",
+        "SSN is still blocked -- 'we were still evaluating' is not a defence to a",
+        "disclosure, and a pilot that permits real leaks is not a pilot, it is an",
+        "unmonitored gap."
+      ],
+      "defaultMode": "monitor",
+      "unknownSiteMode": "monitor",
+      "coverage": "discover",
+      "stageMode": "all"
+    }
+  }
+}

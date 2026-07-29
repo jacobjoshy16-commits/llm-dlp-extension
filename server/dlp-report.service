@@ -1,0 +1,10 @@
+[Unit]
+Description=LLM Data Guard morning report
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=dlp
+WorkingDirectory=/opt/dlp
+EnvironmentFile=/etc/dlp/dlp.env
+ExecStart=/opt/dlp/venv/bin/python /opt/dlp/morning_report.py

@@ -1,0 +1,232 @@
+{
+  "type": "object",
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "title": "Tier 1 metadata endpoint"
+    },
+    "reviewEndpoint": {
+      "type": "string",
+      "title": "Tier 2 end-of-day batch endpoint"
+    },
+    "policyEndpoint": {
+      "type": "string",
+      "title": "Policy pull endpoint (GET). Leave empty to use managed policy only."
+    },
+    "policyPullMinutes": {
+      "type": "number",
+      "title": "Minutes between policy pulls (default 60)"
+    },
+    "flushSeconds": {
+      "type": "number",
+      "title": "Seconds between metadata uploads"
+    },
+    "eodHour": {
+      "type": "number",
+      "title": "End-of-day hour, local time (0-23)"
+    },
+    "eodMinute": {
+      "type": "number",
+      "title": "End-of-day minute"
+    },
+    "maxQueue": {
+      "type": "number",
+      "title": "Max metadata events buffered"
+    },
+    "maxReviewItems": {
+      "type": "number",
+      "title": "Max staged prompts buffered"
+    },
+    "maxStageAgeHours": {
+      "type": "number",
+      "title": "Hard purge age for staged text"
+    },
+    "token": {
+      "type": "string",
+      "title": "Shared token (must match DLP_TOKEN on the server)"
+    },
+    "workstationTag": {
+      "type": "string",
+      "title": "Workstation/user tag stamped on flagged events (set per machine by IT). Preferred attribution source; the only one that works on Firefox."
+    },
+    "defaultMode": {
+      "type": "string",
+      "title": "Fleet-wide enforcement mode",
+      "enum": [
+        "off",
+        "monitor",
+        "warn",
+        "enforce",
+        "strict"
+      ]
+    },
+    "unknownSiteMode": {
+      "type": "string",
+      "title": "Mode for AI sites found by discovery but not in the catalog",
+      "enum": [
+        "off",
+        "monitor",
+        "warn",
+        "enforce",
+        "strict"
+      ]
+    },
+    "coverage": {
+      "type": "string",
+      "title": "catalog = known AI sites only; discover = also score unknown pages heuristically (requires broad host permission)",
+      "enum": [
+        "catalog",
+        "discover"
+      ]
+    },
+    "stageMode": {
+      "type": "string",
+      "title": "all = stage every prompt for nightly review; flagged-only = stage only prompts with findings",
+      "enum": [
+        "all",
+        "flagged-only"
+      ]
+    },
+    "allowServerExemptions": {
+      "type": "boolean",
+      "title": "Permit the policy endpoint to push rule exemptions. Default false: a remotely pushable exemption is a remote off switch."
+    },
+    "group": {
+      "type": "string",
+      "title": "Department/OU name selecting a groupPolicies entry"
+    },
+    "groupPolicies": {
+      "type": "object",
+      "title": "Per-group policy overlays, keyed by group name",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "categoryModes": {
+      "type": "object",
+      "title": "Mode per site category (public_chat, enterprise_ai, code_ai, doc_ai, writing_ai, media_ai, meeting_ai, search_ai, platform, agent_ai)",
+      "additionalProperties": {
+        "type": "string",
+        "enum": [
+          "off",
+          "monitor",
+          "warn",
+          "enforce",
+          "strict"
+        ]
+      }
+    },
+    "siteOverrides": {
+      "type": "object",
+      "title": "Mode per site id (or bare hostname for discovered sites)",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "monitor",
+              "warn",
+              "enforce",
+              "strict"
+            ]
+          }
+        }
+      }
+    },
+    "extraSites": {
+      "type": "array",
+      "title": "AI sites to cover in addition to the shipped catalog",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sanctioned": {
+            "type": "boolean"
+          },
+          "selectors": {
+            "type": "object",
+            "properties": {
+              "composer": {
+                "type": "string"
+              },
+              "send": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "id",
+          "hosts"
+        ]
+      }
+    },
+    "disabledSites": {
+      "type": "array",
+      "title": "Catalog site ids to stop covering",
+      "items": {
+        "type": "string"
+      }
+    },
+    "exemptRules": {
+      "type": "array",
+      "title": "Detection rule ids to exempt fleet-wide (still detected and logged, not enforced)",
+      "items": {
+        "type": "string"
+      }
+    },
+    "exemptRulesBySite": {
+      "type": "object",
+      "title": "Rule ids exempted per site id or hostname",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "neverScan": {
+      "type": "array",
+      "title": "Hostname globs never inspected, in any mode. Banking, payroll, and health portals belong here.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "contextMode": {
+      "type": "string",
+      "title": "Cross-message context analysis: off (default) | monitor | warn | enforce. Reads the last few messages so an identifier split across sends is still caught.",
+      "enum": [
+        "off",
+        "monitor",
+        "warn",
+        "enforce"
+      ]
+    },
+    "contextWindow": {
+      "type": "number",
+      "title": "Messages of history considered by context analysis (2-10, default 5)"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the LLM Data Guard compliance pass at 17:45 CT
+
+[Timer]
+# 15 minutes after the extensions ship their 17:30 batches.
+OnCalendar=Mon-Fri 17:45
+Persistent=true
+
+[Install]
+WantedBy=timers.target
