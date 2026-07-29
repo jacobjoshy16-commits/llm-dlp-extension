@@ -1,16 +1,199 @@
-# County LLM DLP
+# County LLM Data Guard
 
-MV3 extension that inspects text before it is submitted to AI services and
+---
+
+# Start here: what this is, in plain language
+
+*This section assumes you know nothing about data security software. No
+background needed. If you're a developer, skip to [For developers](#for-developers).*
+
+## The problem
+
+County employees use AI chat websites — ChatGPT, Copilot, Gemini and others —
+to help with everyday work. Drafting a letter, summarizing a document,
+rewriting something in plainer words. This is genuinely useful, and people do
+it because it saves time.
+
+The catch is where that text goes. When you type into one of these websites,
+your words are sent over the internet to a company's computers. They are not
+staying on your desk.
+
+So imagine a clerk is answering a resident's question and types:
+
+> *"Help me write a letter to Maria Gonzalez, Social Security number
+> 123-45-6789, about her benefits application."*
+
+That resident's Social Security number has now left the county and is sitting
+on a private company's computers. The clerk wasn't careless — they were trying
+to do their job well. But the county now has a data breach it has to report,
+and Maria's number is somewhere nobody can retrieve it from.
+
+**This happens by accident, by helpful people, and nobody finds out.** That
+last part is the real problem. There's no alarm, no record, no way to know it
+happened at all.
+
+## What this software does
+
+It's a small add-on for the web browser — the program you use to visit
+websites. Once installed, it watches for one specific thing: sensitive
+information about to be sent to an AI website.
+
+When it sees some, it stops the message before it's sent and shows a note
+explaining why.
+
+Three things worth understanding:
+
+**It checks the text on your own computer.** Nothing is sent anywhere to
+decide whether to block. Your words are examined right there on the machine,
+the way a spell-checker works. The alternative — sending everything to a
+central server to be inspected — would mean building one giant collection of
+every sensitive thing anyone ever typed. That collection would be a far more
+attractive target for a thief than the thing we set out to protect.
+
+**It's quiet almost all the time.** Ordinary questions go through untouched.
+You only see it when something is genuinely about to leak.
+
+**It can't be switched off by the person using it.** Not because anyone is
+untrusted, but because a safety measure that turns off when it's inconvenient
+isn't a safety measure. Same reason a fire door closes on its own.
+
+## What counts as sensitive
+
+Two different kinds, treated differently on purpose.
+
+### Kind 1: things that are never okay to send
+
+Social Security numbers. Credit card numbers. Bank account and routing
+numbers. Driver's license numbers. Passwords and access keys. Spreadsheets
+exported from county record systems.
+
+These are **always blocked, for everyone, with no exceptions.**
+
+Not "usually." Not "unless your department has a reason." Always.
+
+Here's the thinking. Suppose the Legal department is careful and the
+Communications department is a bit more relaxed. If a resident's Social
+Security number leaks, does it matter which department sent it? No. That
+resident is harmed exactly the same. The county's legal duty to notify them is
+exactly the same. The number is exactly as exposed.
+
+So there's no version of this where one team gets to be looser about it.
+
+There's also a practical reason this can be absolute: **there is no job at the
+county that requires typing a live Social Security number into a public AI
+website.** None. Because the honest answer is never "yes, I needed to do
+that," blocking it costs nobody anything.
+
+### Kind 2: things that depend on context
+
+Now consider the word *"patient."*
+
+In the Health department, "patient" next to a description of someone's
+condition is a real problem. In the Facilities department, "the patient
+elevator repair schedule" is a completely ordinary sentence.
+
+Same word. One is a leak; the other is a Tuesday.
+
+Other examples: a date of birth, a case number, an internal server address, a
+county email address. Each of these is sensitive in some jobs and routine in
+others.
+
+If we blocked all of them everywhere, people in the departments where they're
+routine would get stopped constantly for no reason. And here's what actually
+happens then — this is the single most common way software like this fails:
+
+> People stop trusting it. They find ways around it. They use their personal
+> phone instead. Now the leak still happens, but it's completely invisible.
+
+A tool that annoys people into avoiding it protects less than a tool that
+never existed, because it also creates false confidence.
+
+So for this second kind, each department sets its own level. Health treats
+medical words strictly. Facilities doesn't need to.
+
+**To put the whole idea in one line:**
+
+> **What counts as a leak is the same for everyone. How much everyday
+> background noise a department puts up with is up to that department.**
+
+## Who this actually protects
+
+Not the county's reputation, in the first instance. The resident.
+
+Maria Gonzalez never chose to have her Social Security number typed into a
+chat website. She gave it to the county because she had to, to get a service
+she was entitled to. She has no way of knowing where it went and no way of
+getting it back.
+
+Everything else here — the reports, the audit records, the retention
+schedule — exists because of that.
+
+## What happens when something is blocked
+
+1. **You see a message.** It says what was found — "Social Security number" —
+   and that the text was not sent. Your words are still in the box; nothing is
+   lost. You can edit and try again.
+
+2. **A note is recorded.** Not your text — just that something was blocked, on
+   which website, at what time. It's the difference between a security camera
+   logging "a door opened at 3pm" and filming the inside of the room.
+
+3. **Nothing is forwarded anywhere.** The blocked text stays on your computer.
+
+For the borderline cases — the context-dependent kind — you get a "are you
+sure?" step instead of a hard stop. You can continue if you know it's fine.
+That choice is recorded too, so if there's ever a question later, there's an
+honest record of what happened and who decided.
+
+## What it cannot do
+
+Being straight about this matters more than a longer feature list. Anyone
+evaluating this deserves to know where the edges are.
+
+- **It only works in the web browser.** If someone installs a desktop AI
+  program, this can't see it.
+- **It can't touch personal phones or home computers.** That needs a written
+  policy, not software.
+- **It can't read pictures.** Photograph a document and upload the photo, and
+  the text inside is invisible to this.
+- **It only knows the AI websites it's been told about** — about 99 of them
+  today. New ones appear constantly. It tries to recognize unfamiliar ones by
+  how they behave, but it reports those rather than blocking them, because
+  guessing wrong and blocking a legitimate county website would be worse.
+
+This handles honest mistakes by people trying to do their jobs. It is not
+designed to stop someone deliberately trying to steal data — that's a
+different problem needing different tools.
+
+## The one thing to take away
+
+**Nobody has to remember anything.** No training to sit through, no rules to
+memorize, no judgment call in the moment about whether this particular thing
+is okay to paste.
+
+If it's genuinely sensitive, it just doesn't go. Even if you're in a hurry.
+Even if it's 4:55 on a Friday. Even if you didn't realize the number was in
+there.
+
+That's the whole idea.
+
+---
+
+# For developers
+
+Browser extension that inspects text before it is submitted to AI services and
 blocks submissions containing protected county data.
 
-Covers **~99 AI applications** across **Chrome, Edge, Firefox, Chromium, and
+Covers **99 AI applications** across **Chrome, Edge, Firefox, Chromium, and
 Safari**, force-installable by enterprise policy, with per-department
 enforcement modes and heuristic detection of AI sites that are not in the
 catalog.
 
-For fleet deployment — GPO, Intune, MDM, Ansible — see
-**[enterprise/README.md](enterprise/README.md)**. Everything below describes how
-the thing works.
+Test suites: **86 unit · 56 end-to-end · 45 fleet · 36 archive.**
+
+For fleet deployment — group policy, Intune, mobile device management,
+Ansible — see **[enterprise/README.md](enterprise/README.md)**. Everything
+below describes how the thing works.
 
 ## Load it (development)
 
