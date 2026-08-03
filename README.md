@@ -1,5 +1,18 @@
 # County LLM DLP (v1)
 
+The problem
+County employees use AI chat websites — ChatGPT, Copilot, Gemini and others — to help with everyday work. Drafting a letter, summarizing a document, rewriting something in plainer words. This is genuinely useful, and people do it because it saves time.
+
+The catch is where that text goes. When you type into one of these websites, your words are sent over the internet to a company's computers. They are not staying on your desk.
+
+So imagine a clerk is answering a resident's question and types:
+
+"Help me write a letter to Maria Gonzalez, Social Security number 123-45-6789, about her benefits application."
+
+That resident's Social Security number has now left the county and is sitting on a private company's computers. The clerk wasn't careless — they were trying to do their job well. But the county now has a data breach it has to report, and Maria's number is somewhere nobody can retrieve it from.
+
+This happens by accident, by helpful people, and nobody finds out. That last part is the real problem. There's no alarm, no record, no way to know it happened at all.
+
 Chrome/Edge MV3 extension that inspects text before it is submitted to public AI
 chat services and blocks submissions containing protected county data.
 
