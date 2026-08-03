@@ -1,6 +1,7 @@
 # County LLM DLP (v1)
 
-The problem
+## The problem:
+
 County employees use AI chat websites — ChatGPT, Copilot, Gemini and others — to help with everyday work. Drafting a letter, summarizing a document, rewriting something in plainer words. This is genuinely useful, and people do it because it saves time.
 
 The catch is where that text goes. When you type into one of these websites, your words are sent over the internet to a company's computers. They are not staying on your desk.
